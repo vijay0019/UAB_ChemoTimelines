@@ -103,19 +103,20 @@ for i in range(MAX_RETRIES + 1):
 dspy.configure(lm=MODELS[0], adapter=MyChatAdapter())
 
 
-class ChemotherapyNotesTimeline(dspy.Signature):
+class ChemoNotesTimeline(dspy.Signature):
     """
-Extract events, drugs, and dates from clinical text.
-Exclude surgical procedures and non-treatment events.
+Extract chemotherapy events and dates from clinical text.
+Exclude surgical procedures, radiation therapy, and other non-chemotherapy-related events.
 Use standardized drug names (e.g., 'cyclophosphamide' instead of 'Cytoxan').
     """
     Notes: str = dspy.InputField(desc="clinical text")
     Timeline: str = dspy.OutputField(desc="structured events")
 
 
-class ChemotherapyTimelineUpdate(dspy.Signature):
+class ChemoTimelineUpdate(dspy.Signature):
     """
 Extract therapies and temporal relations from clinical text and return as structured tuples: (therapy, relation, date_string)
+Exclude surgical procedures, radiation therapy, and other non-chemotherapy-related events.
 
 Therapies: Use generic drug names (cyclophosphamide, docetaxel, chemotherapy, etc.)
 Relations:
@@ -127,6 +128,7 @@ Date formats:
 - Exact dates: 'YYYY-MM-DD' (e.g., '2011-08-08')
 - Month only: 'YYYY-MM' (e.g., '2011-08')
 - Week: 'YYYY-wWW' (e.g., '2011-w32')
+- Year: 'YYYY' (e.g., '2011')
 
 Example output format:
 [[ ## timeline_update ## ]]
@@ -144,7 +146,7 @@ Example output format:
     timeline_update: list[tuple[str, Literal["begins-on", "ends-on", "contains-1"], str]] = dspy.OutputField(desc="new events")
 
 
-class ChemotherapyTimelineCleanup(dspy.Signature):
+class ChemoTimelineCleanup(dspy.Signature):
     """
 Consolidate and clean up events. Remove duplicates and resolve conflicts.
 Maintain the tuple format: (entity, relation, date_string)
@@ -165,15 +167,17 @@ Example output format:
     cleaned_timeline: list[tuple[str, Literal["begins-on", "ends-on", "contains-1"], str]] = dspy.OutputField()
 
 
-class TimelineBuilder(dspy.Module):
-    def __init__(self, starting_chunks: int = 1, intermediate_chunks: int = 1, token_threshold: int = 2048):
+class ChemoTimelineBuilder(dspy.Module):
+    def __init__(self, starting_chunks: int = 1, intermediate_chunks: int = 1,
+                 token_threshold: int = 2048, timeline_cleanup_threshold: int = 10):
         super().__init__()
-        self.debrief_lm = dspy.ChainOfThought(ChemotherapyNotesTimeline)
-        self.update_lm = dspy.ChainOfThought(ChemotherapyTimelineUpdate)
-        self.cleanup_lm = dspy.ChainOfThought(ChemotherapyTimelineCleanup)
+        self.debrief_lm = dspy.ChainOfThought(ChemoNotesTimeline)
+        self.update_lm = dspy.ChainOfThought(ChemoTimelineUpdate)
+        self.cleanup_lm = dspy.ChainOfThought(ChemoTimelineCleanup)
         self.starting_chunks = starting_chunks
         self.intermediate_chunks = intermediate_chunks
         self.token_threshold = token_threshold
+        self.timeline_cleanup_threshold = timeline_cleanup_threshold
 
     def retry(self, func, high_rep_penalty=False, **kwargs):
         for model in MODELS if not high_rep_penalty else LOW_REP_MODELS:
@@ -240,7 +244,7 @@ class TimelineBuilder(dspy.Module):
         timeline = self.process_timeline_update(timeline, output.get("timeline_update", []))
 
         # Clean up if timeline is getting long
-        if len(timeline) > 10:
+        if len(timeline) > self.timeline_cleanup_threshold:
             output = self.retry(self.cleanup_lm, timeline=timeline, high_rep_penalty=True)
             if output.get("reasoning"):
                 reasoning.append(output["reasoning"])
@@ -313,10 +317,19 @@ def evaluate(train, dev, zeroshot):
     print(dspy.inspect_history(10))
 
 
+def make_timeline_example(pair, builder, split):
+    """Create a dspy.Example from a patient-chunks pair"""
+    key, value = pair
+    generated = builder(value["chunks"])
+    with open(f"{split}_{key}.json", "w") as f:
+        json.dump(generated.timeline, f, indent=2)
+
+
 if __name__ == "__main__":
     import json
     import os
     from collections import defaultdict
+    from functools import partial
     from tqdm import tqdm
 
     data = {split: {"chunks": defaultdict(list), "timeline": {}} for split in ["train", "dev"]}
@@ -369,11 +382,10 @@ if __name__ == "__main__":
     print(f"Train examples: {len(train_data)}")
     print(f"Dev examples: {len(dev_data)}")
 
-    # evaluate(train_data, dev_data, TimelineBuilder())
+    # evaluate(train_data, dev_data, ChemoTimelineBuilder())
     
-    builder = TimelineBuilder()
+    builder = ChemoTimelineBuilder()
     for split in ["train", "dev"]:
-        for key, value in tqdm(data[split].items()):
-            generated = builder(value["chunks"])
-            with open(f"{split}_{key}.json", "w") as f:
-                json.dump(generated.timeline, f, indent=2)
+        for pair in tqdm(data[split].items(), desc=f"Processing {split} data"):
+            make_timeline_example(pair, builder, split)
+    print("Timeline examples created successfully.")
