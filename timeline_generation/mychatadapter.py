@@ -232,7 +232,8 @@ class MyChatAdapter(dspy.ChatAdapter):
     #     demos: list[dict[str, Any]],
     #     inputs: dict[str, Any],
     # ) -> list[dict[str, Any]]:
-    #     inputs = self.format(signature, demos, inputs)
+    #     processed_signature = self._call_preprocess(lm, lm_kwargs, signature, inputs)
+    #     inputs = self.format(processed_signature, demos, inputs)
 
     #     for item in inputs:
     #         content = item.get("content", "")
@@ -248,7 +249,7 @@ class MyChatAdapter(dspy.ChatAdapter):
     #         item["content"] = content
 
     #     outputs = lm(messages=inputs, **lm_kwargs)
-    #     return self._call_post_process(outputs, signature)
+    #     return self._call_postprocess(processed_signature, signature, outputs)
 
     # def format(
     #     self,
