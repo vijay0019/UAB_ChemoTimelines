@@ -29,12 +29,68 @@ DEFAULT_REPEAT_LAST_N = 64
 LOW_REP_REPEAT_PENALTY = 1.25
 LOW_REP_REPEAT_LAST_N = 160
 
+CHEMO_DRUGS = Literal[
+    "a.c",
+    "a/c",
+    "abraxane",
+    "ac",
+    "adriamycin",
+    "aflibercept",
+    "alfa-2b interferon",
+    "alibercept",
+    "alpha-2b interferon",
+    "arimidex",
+    "avastin",
+    "bevacizumab",
+    "caboplatin",
+    "cabotaxol",
+    "carbo",
+    "carboplatin",
+    "carbotaxol",
+    "chemo",
+    "chemotherapy",
+    "cisplatin",
+    "cistoplatin",
+    "cyclophosphamide",
+    "cytoxan",
+    "docetaxel",
+    "docetaxol",
+    "doxil",
+    "doxorubicin",
+    "gemcitabine",
+    "gemzar",
+    "herceptin",
+    "il-2",
+    "il2",
+    "interferon",
+    "interleukin-2",
+    "ipilimumab",
+    "liposomal doxorubicin",
+    "methotrexate",
+    "paclitaxel",
+    "tamoxifen",
+    "tax",
+    "taxol",
+    "taxotere",
+    "tc",
+    "tch",
+    "temozolomide",
+    "vaccinia",
+    "vaccinia virus"
+]
+
+RELATIONS = Literal[
+    "begins-on",
+    "ends-on",
+    "contains-1"
+]
+
 
 class ThreadSafeOllamaLM(dspy.LM):
-    def __init__(self, ports=(11435, 11436, 11437), **kwargs):
+    def __init__(self, ports=(11435, 11436, 11437, 11438), **kwargs):
         self.lms = []
-        self._counter = random.randint(0, len(ports) - 1)
-        self._lock = threading.Lock()
+        # self._counter = random.randint(0, len(ports) - 1)
+        # self._lock = threading.Lock()
         self.kwargs = kwargs
 
         for port in ports:
@@ -50,13 +106,13 @@ class ThreadSafeOllamaLM(dspy.LM):
         return utils, mems
 
     def _get_next_gpu(self):
-        sleep(random.random() * 0.1)  # small delay to avoid contention
+        sleep(random.random() * 0.1 + 0.1)  # small delay to avoid contention
         utils, mems = self.get_gpu_utilization()
-        least_utilized = min(range(deviceCount), key=lambda i: (utils[i].gpu, mems[i].used))
-        if random.random() < 0.5 or utils[least_utilized].gpu == 0:
-            with self._lock:
-                self._counter = (self._counter + 1) % len(self.lms)
-            return self._counter
+        least_utilized = min(range(deviceCount), key=lambda i: (utils[i].gpu, mems[i].used, random.random()))
+        # if random.random() < 0.5 or utils[least_utilized].gpu == 0:
+        #     with self._lock:
+        #         self._counter = (self._counter + 1) % len(self.lms)
+        #     return self._counter
         return least_utilized
 
     def __call__(self, **kwargs):
@@ -108,6 +164,54 @@ class ChemoNotesTimeline(dspy.Signature):
 Extract chemotherapy events and dates from clinical text.
 Exclude surgical procedures, radiation therapy, and other non-chemotherapy-related events.
 Use standardized drug names (e.g., 'cyclophosphamide' instead of 'Cytoxan').
+Include ALL mentions from the following list (and any additional mentions found in the text):
+  "a.c",
+  "a/c",
+  "abraxane",
+  "ac",
+  "adriamycin",
+  "aflibercept",
+  "alfa-2b interferon",
+  "alibercept",
+  "alpha-2b interferon",
+  "arimidex",
+  "avastin",
+  "bevacizumab",
+  "caboplatin",
+  "cabotaxol",
+  "carbo",
+  "carboplatin",
+  "carbotaxol",
+  "chemo",
+  "chemotherapy",
+  "cisplatin",
+  "cistoplatin",
+  "cyclophosphamide",
+  "cytoxan",
+  "docetaxel",
+  "docetaxol",
+  "doxil",
+  "doxorubicin",
+  "gemcitabine",
+  "gemzar",
+  "herceptin",
+  "il-2",
+  "il2",
+  "interferon",
+  "interleukin-2",
+  "ipilimumab",
+  "liposomal doxorubicin",
+  "methotrexate",
+  "paclitaxel",
+  "tamoxifen",
+  "tax",
+  "taxol",
+  "taxotere",
+  "tc",
+  "tch",
+  "temozolomide",
+  "vaccinia",
+  "vaccinia virus"
     """
     Notes: str = dspy.InputField(desc="clinical text")
     Timeline: str = dspy.OutputField(desc="structured events")
@@ -119,6 +223,7 @@ Extract therapies and temporal relations from clinical text and return as struct
 Exclude surgical procedures, radiation therapy, and other non-chemotherapy-related events.
 
 Therapies: Use generic drug names (cyclophosphamide, docetaxel, chemotherapy, etc.)
+
 Relations:
 - 'begins-on': treatment/medication starts
 - 'ends-on': treatment/medication ends
@@ -136,14 +241,16 @@ Example output format:
     ('tc', 'contains-1', '2011-08'),
     ('cyclophosphamide', 'begins-on', '2011-08-08'),
     ('docetaxel', 'begins-on', '2011-08-08'),
+    ('chemo', 'contains-1', '2011-08-10'),
     ('chemotherapy', 'contains-1', '2011-08-10'),
+    ('docetaxol', 'contains-1', '2011-w36'),
     ('cyclophosphamide', 'ends-on', '2011-10-10')
 ]
 [[ ## completed ## ]]
     """
-    previous_timeline: list[tuple[str, Literal["begins-on", "ends-on", "contains-1"], str]] = dspy.InputField(desc="existing events")
+    previous_timeline: list[tuple[CHEMO_DRUGS, RELATIONS, str]] = dspy.InputField(desc="existing events")
     chunk_content: str = dspy.InputField(desc="current text chunk")
-    timeline_update: list[tuple[str, Literal["begins-on", "ends-on", "contains-1"], str]] = dspy.OutputField(desc="new events")
+    timeline_update: list[tuple[CHEMO_DRUGS, RELATIONS, str]] = dspy.OutputField(desc="new events")
 
 
 class ChemoTimelineCleanup(dspy.Signature):
@@ -158,18 +265,20 @@ Example output format:
     ('tc', 'contains-1', '2011-08'),
     ('cyclophosphamide', 'begins-on', '2011-08-08'),
     ('docetaxel', 'begins-on', '2011-08-08'),
+    ('chemo', 'contains-1', '2011-08-10'),
     ('chemotherapy', 'contains-1', '2011-08-10'),
+    ('docetaxol', 'contains-1', '2011-w36'),
     ('cyclophosphamide', 'ends-on', '2011-10-10')
 ]
 [[ ## completed ## ]]
     """
-    timeline: list[tuple[str, Literal["begins-on", "ends-on", "contains-1"], str]] = dspy.InputField()
-    cleaned_timeline: list[tuple[str, Literal["begins-on", "ends-on", "contains-1"], str]] = dspy.OutputField()
+    timeline: list[tuple[CHEMO_DRUGS, RELATIONS, str]] = dspy.InputField()
+    cleaned_timeline: list[tuple[CHEMO_DRUGS, RELATIONS, str]] = dspy.OutputField()
 
 
 class ChemoTimelineBuilder(dspy.Module):
     def __init__(self, starting_chunks: int = 1, intermediate_chunks: int = 1,
-                 token_threshold: int = 2048, timeline_cleanup_threshold: int = 10):
+                 token_threshold: int = CONTEXT_WINDOW * 0.25, timeline_cleanup_threshold: int = 10):
         super().__init__()
         self.debrief_lm = dspy.ChainOfThought(ChemoNotesTimeline)
         self.update_lm = dspy.ChainOfThought(ChemoTimelineUpdate)
@@ -211,7 +320,7 @@ class ChemoTimelineBuilder(dspy.Module):
             if len(event) == 3:
                 entity, relation, date_str = event
                 if date_str:
-                    processed_events.append((entity, relation, date_str))
+                    processed_events.append((entity.lower(), relation.lower(), date_str.lower()))
 
         # Combine with existing timeline
         all_events = list(current_timeline) + processed_events
@@ -280,90 +389,103 @@ class ChemoTimelineBuilder(dspy.Module):
         )
 
 
-def evaluate(train, dev, zeroshot):
-    def timeline_metric(example, pred, trace=None):
-        """Simple exact match for timeline comparison"""
-        try:
-            return sorted(example.timeline) == sorted(pred.timeline)
-        except:
-            return False
+def evaluate(train, dev, zeroshot, optimize=True):
+    def timeline_f1(example, pred, trace=None):
+        """Simplified metric for timeline comparison"""
+        if not pred.timeline and not example.timeline:
+            return 1.0
+        if not pred.timeline or not example.timeline:
+            return 0.0
+
+        # Convert to sets for easier comparison
+        pred_set = set(pred.timeline)
+        true_set = set(example.timeline)
+
+        # Calculate precision and recall
+        true_positives = len(pred_set & true_set)
+        precision = true_positives / len(pred_set)
+        recall = true_positives / len(true_set)
+
+        # F1 score
+        if precision + recall == 0:
+            return 0.0
+        return 2 * (precision * recall) / (precision + recall)
+    
+    # # Split train into train and validation sets
+    # val = [example for example in train if sum([len(tokenizer.encode(chunk)) for chunk in example.chunks]) >= CONTEXT_WINDOW or len(example.timeline) == 0]
+    # train = [example for example in train if sum([len(tokenizer.encode(chunk)) for chunk in example.chunks]) < CONTEXT_WINDOW and len(example.timeline) > 0]
+    # print(f"Train examples: {len(train)}, Validation examples: {len(val)}")
 
     # Define evaluator
     evaluator = dspy.Evaluate(devset=dev,
-                              metric=timeline_metric,
-                              num_threads=8,
+                              metric=timeline_f1,
+                              num_threads=16,
                               display_progress=True,
                               return_outputs=True,
                               max_errors=0)
 
     # Evaluate zero-shot model
     print("Zero-shot results:")
-    acc_zero, outputs_zero = evaluator(zeroshot)
+    evaluation = evaluator(zeroshot)
+    acc_zero, outputs_zero = evaluation["score"], evaluation["results"]
     print(f"Zero-shot accuracy: {acc_zero}")
+    
+    if not optimize:
+        print("Skipping optimization.")
+        return acc_zero, outputs_zero, zeroshot
 
     # Train few-shot model
-    optimizer = dspy.SIMBA(metric=timeline_metric)
+    optimizer = dspy.SIMBA(metric=timeline_f1, num_threads=16)
     fewshot = optimizer.compile(zeroshot, trainset=train)
 
     # Evaluate few-shot model
     print("Few-shot results:")
-    acc_few, outputs_few = evaluator(fewshot)
+    evaluation = evaluator(fewshot)
+    acc_few, outputs_few = evaluation["score"], evaluation["results"]
     print(f"Few-shot accuracy: {acc_few}")
+    
+    # print(dspy.inspect_history(10))
 
     if acc_zero < acc_few:
         fewshot.save("fewshot_model.json")
         print("Saved improved few-shot model")
+        return acc_few, outputs_few, fewshot
+    else:
+        print("Few-shot model did not improve over zero-shot model")
+        return acc_zero, outputs_zero, zeroshot
+        
 
-    print(dspy.inspect_history(10))
-
-
-def make_timeline_example(pair, builder, split):
-    """Create a dspy.Example from a patient-chunks pair"""
-    key, value = pair
-    generated = builder(value["chunks"])
-    with open(f"{split}_{key}.json", "w") as f:
-        json.dump(generated.timeline, f, indent=2)
-
-
-if __name__ == "__main__":
-    import json
-    import os
-    from collections import defaultdict
-    from functools import partial
-    from tqdm import tqdm
-
-    data = {split: {"chunks": defaultdict(list), "timeline": {}} for split in ["train", "dev"]}
-    notes_path = "chemoTimelines2024_train_dev_labeled/subtask1/Patient_Notes"
-    timelines_path = "chemoTimelines2024_train_dev_labeled/subtask1/Gold_Timelines_allPatients_processed"
-
-    # Load timelines and notes
-    for timeline in os.listdir(timelines_path):
-        if timeline.endswith(".json"):
-            split, site, patient = timeline[:-5].split("_")
-            with open(os.path.join(timelines_path, timeline), 'r') as f:
-                timelines = json.load(f)
-            data[split]["timeline"][f"{site}_{patient}"] = [tuple(item) for item in timelines]
-            report_path = os.path.join(notes_path, site, split, patient)
-            for report in os.listdir(report_path):
-                with open(os.path.join(report_path, report), 'r') as f:
-                    content = f.read()
-                data[split]["chunks"][f"{site}_{patient}"].append(content)
-
-    # Concatenate chunks for each patient
+def concatenate_chunks(data, target):
+    data = data.copy()
+    # Concatenate chunks intelligently to fit within the context window
     for split in data:
-        for patient, chunks in data[split]["chunks"].items():
-            if len(chunks) > 1:
+        items = list(data[split]["chunks"].items())
+        for key, value in items:
+            # Concatenate chunks if they fit within the context window
+            concat = "\n\n\n".join(v for k, v in value)
+            n = len(tokenizer.encode(concat))
+            if len(value) == 1 or n < target:
+                data[split]["chunks"][key] = [concat]
+            # If more than one chunk, concatenate them intelligently
+            else:
+                # Group chunks by report ID and concatenate them
+                chunks = ["\n\n\n".join(v for k, v in value if k == i) for i in sorted(set(k for k, v in value))]
+                # Concatenate chunks while respecting the context window
+                # Use a greedy approach to concatenate as many chunks as possible without exceeding the context window
+                # This is a simple heuristic and may not be optimal
                 concatenated_chunks = []
-                current_chunk = chunks[0].strip()
-                for chunk in chunks[1:]:
-                    if len(tokenizer.encode(current_chunk + "\n\n\n" + chunk.strip())) < 8192:
-                        current_chunk += "\n\n\n" + chunk.strip()
+                current_chunk = chunks[0]
+                # target = math.ceil(n / math.ceil(2 * n / CONTEXT_WINDOW))
+                for i, chunk in enumerate(chunks[1:], 1):
+                    # Check if adding the next chunk exceeds the context window
+                    if len(tokenizer.encode(current_chunk + "\n\n\n" + chunk)) < target:
+                        current_chunk += "\n\n\n" + chunk
                     else:
-                        concatenated_chunks.append(current_chunk.strip())
-                        current_chunk = chunk.strip()
+                        concatenated_chunks.append(current_chunk)
+                        current_chunk = chunk
                 if current_chunk:
-                    concatenated_chunks.append(current_chunk.strip())
-                data[split]["chunks"][patient] = concatenated_chunks
+                    concatenated_chunks.append(current_chunk)
+                data[split]["chunks"][key] = concatenated_chunks
 
     # Rearrange data structure
     for split in data:
@@ -375,6 +497,39 @@ if __name__ == "__main__":
                     "timeline": data[split]["timeline"][patient]
                 }).with_inputs("chunks")
         data[split] = new_data
+        
+    return data
+
+
+if __name__ == "__main__":
+    import json
+    import math
+    import os
+    from collections import defaultdict
+    from copy import deepcopy
+    from functools import partial
+    from tqdm import tqdm
+
+    data = {split: {"chunks": defaultdict(list), "timeline": {}} for split in ["train", "dev"]}
+    notes_path = "chemoTimelines2024_train_dev_labeled/subtask1/Patient_Notes"
+    timelines_path = "chemoTimelines2024_train_dev_labeled/subtask1/Gold_Timelines_allPatients_processed"
+
+    # Load timelines and notes
+    report_type = lambda x: x.split('_')[-1].strip(".txt").upper()
+    for file in os.listdir(timelines_path):
+        if file.endswith(".json"):
+            split, site, patient = file[:-5].split("_")
+            with open(os.path.join(timelines_path, file), 'r') as f:
+                timelines = json.load(f)
+            data[split]["timeline"][f"{site}_{patient}"] = [tuple(item) for item in timelines]
+            reports_path = os.path.join(notes_path, site, split, patient)
+            for report in sorted(os.listdir(reports_path), key=lambda x: ['NOTE', 'PGN', 'RAD', report_type(x)].index(report_type(x))):
+                with open(os.path.join(reports_path, report), 'r') as f:
+                    content = f.read().strip()
+                data[split]["chunks"][f"{site}_{patient}"].append((re.search(r'report(\d+)', report).group(1), content))
+
+    data_old = deepcopy(data)
+    data = concatenate_chunks(data, target=CONTEXT_WINDOW * 0.75)
 
     train_data = list(data["train"].values())
     dev_data = list(data["dev"].values())
@@ -382,10 +537,32 @@ if __name__ == "__main__":
     print(f"Train examples: {len(train_data)}")
     print(f"Dev examples: {len(dev_data)}")
 
-    # evaluate(train_data, dev_data, ChemoTimelineBuilder())
+    # acc_large, outputs_large, zeroshot = evaluate(train_data, dev_data, ChemoTimelineBuilder(), optimize=False)
+    # data = concatenate_chunks(data_old, target=CONTEXT_WINDOW * 0.25)
+    # train_data = list(data["train"].values())
+    # dev_data = list(data["dev"].values())
+    # acc_small, outputs_small, fewshot = evaluate(train_data, dev_data, ChemoTimelineBuilder())
+    # if acc_small > acc_large:
+    #     print(f"Small context window model ({acc_small}) outperformed large context window model ({acc_large}).")
+    #     builder = zeroshot
+    # else:
+    #     print(f"Large context window model ({acc_large}) outperformed small context window model ({acc_small}).")
+    #     builder = fewshot
     
-    builder = ChemoTimelineBuilder()
+    _, _, builder = evaluate(train_data, dev_data, ChemoTimelineBuilder(), optimize=False)
+
+    jsons = defaultdict(dict)
     for split in ["train", "dev"]:
-        for pair in tqdm(data[split].items(), desc=f"Processing {split} data"):
-            make_timeline_example(pair, builder, split)
+        for key, value in tqdm(data[split].items(), desc=f"Processing {split} data"):
+            site, patient = key.split('_')
+            generated = builder(value["chunks"])
+            for entry in list(generated.timeline):
+                if not re.match(r'^\d{4}(?:-(?:\d{2}(?:-\d{2})?|w\d{2}))?$', entry[2]):
+                    print(f"Invalid date format in entry {entry} for {patient} in {site} {split}. Removing entry.")
+                    generated.timeline.remove(entry)
+            jsons[f"{site}_{split}"][patient] = generated.timeline
+    for site_split, timelines in jsons.items():
+        with open(f"{site_split}_all_patients_generated_timelines.json", "w") as f:
+            json.dump(timelines, f, indent=2)
+            
     print("Timeline examples created successfully.")

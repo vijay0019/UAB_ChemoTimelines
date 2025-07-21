@@ -17,7 +17,6 @@ from dspy.utils.exceptions import AdapterParseError
 from typing import TYPE_CHECKING, Any, Optional, Type
 
 from dspy.adapters.types import History
-from dspy.adapters.types.image import try_expand_image_tags
 from dspy.signatures.signature import Signature
 from dspy.utils.callback import BaseCallback, with_callbacks
 
@@ -312,10 +311,11 @@ class MyChatAdapter(dspy.ChatAdapter):
 
     #     messages = []
     #     system_message = (
-    #         "/no_think\n"
+    #         # "/no_think\n"
     #         f"{self.format_field_description(signature)}\n"
     #         f"{self.format_field_structure(signature)}\n"
-    #         f"{self.format_task_description(signature)}"
+    #         f"{self.format_task_description(signature)}\n"
+    #         "Do not overthink!"
     #     )
     #     messages.append({"role": "system", "content": system_message})
     #     messages.extend(self.format_demos(signature, demos))
