@@ -25,11 +25,11 @@ from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 field_header_pattern = re.compile(r"\[\[ ## (\w+) ## \]\]")
 
 
-class CancerNotes(NamedTuple):
-	events: list[str]
-	sites: list[str]
-import datetime
-from datetime import date
+class Date(NamedTuple):
+	year: int
+	month: int|None
+	day_of_month: int|None
+	week: int|None
 
 
 def parse_value(value, annotation):
@@ -91,63 +91,26 @@ class MyChatAdapter(dspy.ChatAdapter):
         completion = re.sub(r"```(?:python|json|markdown|plaintext)\n(.*?)\n```", r"\1", completion, flags=re.DOTALL)
         completion = re.sub(r"```(?:python|json|markdown|plaintext)?", "", completion, flags=re.DOTALL)
         completion = completion.replace("python", "")
-        completion = re.sub(r"import datetime\s+", "", completion)
-        completion = re.sub(r"from datetime import date\s+", "", completion)
-        # completion = re.sub(r"datetime.datetime\((\d{4}), (\d+), (\d+), (\d+), (\d+)\)", r"datetime.date(\1, \2, \3)", completion)
-        completion = re.sub(r"(?:datetime\.)?date\((\d{4})-0?(\d+)-0?(\d+)\)", r"datetime.date(\1, \2, \3)", completion)
-        completion = re.sub(r"(?:datetime\.)?date\((\d{4}), (\d+)\)", r"datetime.date(\1, \2, 15)", completion)
-        completion = re.sub(r"(?:datetime\.date)?\((\d{4})-(\d+, \d+)\)", r"datetime.date(\1, \2)", completion)
-        completion = re.sub(r"datetime\.date\((\d{4}), 0?(\d+), 0?(\d+)\)", r"datetime.date(\1, \2, \3)", completion)
-        completion = re.sub(r"datetime\.date\((\d{4}), 0?(\d+)-0?(\d+)\)", r"datetime.date(\1, \2, \3)", completion)
-        completion = re.sub(r"datetime\.date\((\d{4})-0?(\d+)-0?(\d+)\)", r"datetime.date(\1, \2, \3)", completion)
-        if "CancerNotes" in completion:
-            post = re.search(r'"post-(\d+)-(\d+)-(\d+)"', completion)
-            if post:
-                y, m, d = post.groups()
-                thedate = date(int(y), int(m), int(d)) + datetime.timedelta(days=1)
-                y, m, d = thedate.year, thedate.month, thedate.day
-                completion = re.sub(r'"post-(\d+)-(\d+)-(\d+)"', f"datetime.date({y}, {m}, {d})", completion)
         if re.search(r"\[\[ \n##", completion):
             completion = re.sub(r"\[\[ \n## (\w+) ##(?: \]\])?", r"[[ ## \1 ## ]]", completion)
             completion = re.sub(r"\n\]\]\n", "\n", completion)
         if re.search(r"\[\[ ## \w+ ##\n", completion):
             completion = re.sub(r"\[\[ ## (\w+) ##\n", r"[[ ## \1 ## ]]\n", completion)
             completion = re.sub(r"\n\]\]\n", "\n", completion)
-        if "today" in completion:
-            completion = completion.replace("today = date.today()\n", "").replace("today", "datetime.date(2022, 6, 30)")
-        if "CancerNotes" in completion:
-            completion = re.sub(r'"Planned Treatment": CancerNotes\(', 'datetime.date(2022, 6, 30): CancerNotes(', completion)
-            completion = re.sub(r"[Ff]indings", "events", completion)
-            completion = re.sub(r"[Ll]ocations", "sites", completion)
         completion = re.sub(r"\w+ = \{", "{", completion)
         completion = re.sub(r"\[\s+\[", "[", completion)
         completion = re.sub(r"\]\s+\]", "]", completion)
         completion = re.sub(r"\],\s+\[", "", completion)
-        if "CancerNotes" in completion:
-            completion = re.sub(r"(\[\[ ## \w+ ## \]\]\s+\{.*?\}).*?(\[\[ ## completed ## \]\])", r"\1\n\n\2", completion, flags=re.DOTALL)
         completion = completion.replace("[[[assistant", "[[ ## completed ## ]]").replace("[[end]]", "[[ ## completed ## ]]").replace("[[[<paste>]]]", "[[ ## completed ## ]]")
         completion = re.sub(r"\}(?!.*\}).*?$", "}\n\n[[ ## completed ## ]]", completion, flags=re.DOTALL)
         completion = re.sub(r", None", "", completion)
-        completion = completion.replace("CancerTimelineEvent", "CancerNotes").replace("CancerEvents", "CancerNotes")
         completion = completion.replace("### [[ ##", "[[ ##")
         completion = re.sub(r"### Timeline:?", "[[ ## Timeline ## ]]", completion)
         completion = re.sub(r"### Reasoning:?", "[[ ## reasoning ## ]]", completion)
-        completion = re.sub(r"### Severities:?", "[[ ## severities ## ]]", completion)
         completion = completion.replace(": null", ': "deceased"')
         completion = completion.replace("]]\n\n", "]]\n")
         completion = re.sub('"True"', "True", completion, flags=re.IGNORECASE)
         completion = re.sub('"False"', "False", completion, flags=re.IGNORECASE)
-        # if CancerNotes is missing a Sites field, add it
-        if "CancerNotes(" in completion:
-            cancer_notes_pattern = re.compile(r"CancerNotes\((\s*events=\[.*?\].*?)\)", flags=re.DOTALL)
-            # This function adds a default empty sites list if it is missing
-            # from the CancerNotes instantiation
-            def add_missing_sites(match):
-                content = match.group(1)
-                if "sites=" not in content:
-                    content += (", " if "]," not in content else "") + "sites=[]"
-                return f"CancerNotes({content})"
-            completion = cancer_notes_pattern.sub(add_missing_sites, completion)
         missing_field = []
         if len(signature.output_fields) == 1:
             field = list(signature.output_fields.keys())[0]
@@ -170,24 +133,9 @@ class MyChatAdapter(dspy.ChatAdapter):
                 missing_field = []
         completion = re.sub(r"\[{3,} ## (\w+) ## \]{3,}", r"[[ ## \1 ## ]]", completion)
         completion = re.sub(r"'(.*?[a-z]'s.*?)'", r'"\1"', completion)
-        completion = re.sub(r"(\[\[ ## IsCancerNote ## \]\]\s*(?:True|False)).*?(\[\[ ## completed ## \]\])", r"\1\n\n\2", completion, flags=re.DOTALL)
-        if "## severities ##" in completion:
-            completion = completion.replace("'not applicable'", '"local"').replace("'mixed'", '"distant"')
-        completion = re.sub(r'(events=\[\s*)\((.*?)\)', r'\1\2', completion, flags=re.DOTALL)
         completion = completion.replace(")\n\n[[ ## completed ## ]]", ")}\n\n[[ ## completed ## ]]")
-        if "CancerNotes" in completion:
-            completion = completion.replace('")\n', '"\n')
-            completion = re.sub(r"events=[\[\(](.*?)[\)\]](,\s*sites)", r"events=[\1]\2", completion, flags=re.DOTALL)
-            completion = re.sub(r'events=(".*?")', r"events=[\1]", completion, flags=re.DOTALL)
-            completion = re.sub(r"events=('.*?')", r"events=[\1]", completion, flags=re.DOTALL)
-            completion = completion.replace('")]', '"]')
         completion = re.sub(r"### (\[\[ ## \w+ ## \]\])", r"\1", completion)
-        completion = re.sub(r"1-01-06", "1, 6", completion)
-        completion = re.sub(r'"(datetime\.date\(\d{4}, \d{1,2}, \d{1,2}\))"', r'\1', completion)
-        completion = re.sub(r"\[\[ ## severities ## \]\]\n.*?\n\['", r"[[ ## severities ## ]]\n\n['", completion, flags=re.DOTALL)
         completion = completion.replace("### [[## Reasoning ##]]", "[[ ## reasoning ## ]]")
-        completion = re.sub(r"datetime\.date.*None,?\n", "", completion)
-        completion =re.sub(r"events=\[\s*\[(.*?)\]\s*\]", r"events=[\1]", completion, flags=re.DOTALL)
         # print(f"Completion after postprocessing: {completion}")
         if missing_field:
             pass
