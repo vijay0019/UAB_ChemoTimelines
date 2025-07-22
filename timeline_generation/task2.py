@@ -3,7 +3,6 @@ import os
 import random
 import re
 import threading
-from datetime import date, timedelta
 from pprint import pprint
 from time import sleep
 
@@ -28,74 +27,6 @@ DEFAULT_REPEAT_PENALTY = 1.1
 DEFAULT_REPEAT_LAST_N = 64
 LOW_REP_REPEAT_PENALTY = 1.25
 LOW_REP_REPEAT_LAST_N = 160
-
-CHEMO_DRUGS = [
-    "a.c",
-    "a/c",
-    "abraxane",
-    "ac",
-    "adriamycin",
-    "aflibercept",
-    "alfa-2b interferon",
-    "alibercept",
-    "alpha-2b interferon",
-    "arimidex",
-    "avastin",
-    "bevacizumab",
-    "caboplatin",
-    "cabotaxol",
-    "carbo",
-    "carboplatin",
-    "carbotaxol",
-    "chemo",
-    "chemotherapy",
-    "cisplatin",
-    "cistoplatin",
-    "cyclophosphamide",
-    "cytoxan",
-    "docetaxel",
-    "docetaxol",
-    "doxil",
-    "doxorubicin",
-    "gemcitabine",
-    "gemzar",
-    "herceptin",
-    "il-2",
-    "il2",
-    "interferon",
-    "interleukin-2",
-    "ipilimumab",
-    "liposomal doxorubicin",
-    "methotrexate",
-    "paclitaxel",
-    "tamoxifen",
-    "tax",
-    "taxol",
-    "taxotere",
-    "tc",
-    "tch",
-    "temozolomide",
-    "vaccinia",
-    "vaccinia virus"
-]
-
-RELATIONS = Literal[
-    "begins-on",
-    "ends-on",
-    "contains-1"
-]
-
-EXAMPLE_TIMELINE = """
-[
-    ('tc', 'contains-1', '2011-08'),
-    ('cyclophosphamide', 'begins-on', '2011-08-08'),
-    ('docetaxel', 'begins-on', '2011-08-08'),
-    ('chemo', 'contains-1', '2011-08-10'),
-    ('chemotherapy', 'contains-1', '2011-08-10'),
-    ('docetaxol', 'contains-1', '2011-w36'),
-    ('cyclophosphamide', 'ends-on', '2011-10-10')
-]
-"""
 
 
 class ThreadSafeOllamaLM(dspy.LM):
@@ -170,6 +101,98 @@ for i in range(MAX_RETRIES + 1):
 
 dspy.configure(lm=MODELS[0], adapter=MyChatAdapter())
 
+CHEMO_DRUGS = [
+    "a.c",
+    "a/c",
+    "abraxane",
+    "ac",
+    "adriamycin",
+    "aflibercept",
+    "alfa-2b interferon",
+    "alibercept",
+    "alpha-2b interferon",
+    "arimidex",
+    "avastin",
+    "bevacizumab",
+    "caboplatin",
+    "cabotaxol",
+    "carbo",
+    "carboplatin",
+    "carbotaxol",
+    "chemo",
+    "chemotherapy",
+    "cisplatin",
+    "cistoplatin",
+    "cyclophosphamide",
+    "cytoxan",
+    "docetaxel",
+    "docetaxol",
+    "doxil",
+    "doxorubicin",
+    "gemcitabine",
+    "gemzar",
+    "herceptin",
+    "il-2",
+    "il2",
+    "interferon",
+    "interleukin-2",
+    "ipilimumab",
+    "liposomal doxorubicin",
+    "methotrexate",
+    "paclitaxel",
+    "tamoxifen",
+    "tax",
+    "taxol",
+    "taxotere",
+    "tc",
+    "tch",
+    "temozolomide",
+    "vaccinia",
+    "vaccinia virus"
+]
+
+Relation = Literal[
+    "begins-on",
+    "ends-on",
+    "contains-1"
+]
+
+
+class Date(NamedTuple):
+	year: int
+	month: int|None
+	day_of_month: int|None
+	week: int|None
+
+
+def convert_date_to_string(date: Date) -> str:
+    """Convert Date tuple to string in competition format."""
+    assert date.year is not None
+    if date.week is None or date.day_of_month is not None:
+        if date.month is None:
+            return f"{date.year}"
+        if date.day_of_month is None:
+            return f"{date.year}-{date.month:02d}"
+        return f"{date.year}-{date.month:02d}-{date.day_of_month:02d}"
+    return f"{date.year}-w{date.week:02d}"
+    
+
+
+TIMELINE = list[tuple[Literal[*CHEMO_DRUGS], Relation, Date]]
+
+EXAMPLE_TIMELINE = """
+[
+    ('tc', 'contains-1', Date(year=2011, month=8, day_of_month=None, week=None)),
+    ('cyclophosphamide', 'begins-on', Date(year=2011, month=8, day_of_month=8, week=None)),
+    ('docetaxel', 'begins-on', Date(year=2011, month=8, day_of_month=8, week=None)),
+    ('chemo', 'contains-1', Date(year=2011, month=8, day_of_month=10, week=None)),
+    ('chemotherapy', 'contains-1', Date(year=2011, month=8, day_of_month=10, week=None)),
+    ('docetaxol', 'contains-1', Date(year=2011, month=None, day_of_month=None, week=36)),
+    ('cyclophosphamide', 'ends-on', Date(year=2011, month=10, day_of_month=10, week=None)),
+    ('chemotherapy', 'ends-on', Date(year=2012, month=None, day_of_month=None, week=None))
+]
+"""
+
 
 class ChemoNotesTimeline(dspy.Signature):
     __doc__ = """
@@ -183,7 +206,7 @@ Include ALL mentions from the following list (and any additional mentions found 
 
 class ChemoTimelineUpdate(dspy.Signature):
     __doc__ = """
-Extract therapies and temporal relations from clinical text and return as structured tuples: (therapy, relation, date_string)
+Extract therapies and temporal relations from clinical text and return as structured tuples: (therapy, relation, date)
 Exclude surgical procedures, radiation therapy, and other non-chemotherapy-related events.
 
 Therapies: Use generic drug names (cyclophosphamide, docetaxel, chemotherapy, etc.)
@@ -193,31 +216,31 @@ Relations:
 - 'ends-on': treatment/medication ends
 - 'contains-1': treatment occurred within timeframe
 
-Date formats:
-- Exact dates: 'YYYY-MM-DD' (e.g., '2011-08-08')
-- Month only: 'YYYY-MM' (e.g., '2011-08')
-- Week: 'YYYY-wWW' (e.g., '2011-w32')
-- Year: 'YYYY' (e.g., '2011')
+Acceptable date formats (in order of preference):
+1. Specify year, month, and day.
+2. Specify year and week.
+3. Specify year and month.
+4. Specify year only.
 
 Example output format:
 [[ ## timeline_update ## ]]""" + EXAMPLE_TIMELINE + """[[ ## completed ## ]]
     """
-    previous_timeline: list[tuple[Literal[*CHEMO_DRUGS], RELATIONS, str]] = dspy.InputField(desc="existing events")
+    timeline: TIMELINE = dspy.InputField(desc="existing events")
     chunk_content: str = dspy.InputField(desc="current text chunk")
-    timeline_update: list[tuple[Literal[*CHEMO_DRUGS], RELATIONS, str]] = dspy.OutputField(desc="new events")
+    timeline_update: TIMELINE = dspy.OutputField(desc="new events")
 
 
 class ChemoTimelineCleanup(dspy.Signature):
     __doc__ = """
 Consolidate and clean up events. Remove duplicates and resolve conflicts.
-Maintain the tuple format: (entity, relation, date_string)
+Maintain the tuple format: (entity, relation, date)
 Sort by date and ensure logical consistency (begins-on before ends-on for same entity).
 
 Example output format:
 [[ ## cleaned_timeline ## ]]""" + EXAMPLE_TIMELINE + """[[ ## completed ## ]]
     """
-    timeline: list[tuple[Literal[*CHEMO_DRUGS], RELATIONS, str]] = dspy.InputField()
-    cleaned_timeline: list[tuple[Literal[*CHEMO_DRUGS], RELATIONS, str]] = dspy.OutputField()
+    timeline: TIMELINE = dspy.InputField()
+    cleaned_timeline: TIMELINE = dspy.OutputField()
 
 
 class ChemoTimelineBuilder(dspy.Module):
@@ -258,16 +281,8 @@ class ChemoTimelineBuilder(dspy.Module):
         if not new_events:
             return current_timeline
 
-        # Standardize and validate new events
-        processed_events = []
-        for event in new_events:
-            if len(event) == 3:
-                entity, relation, date_str = event
-                if date_str:
-                    processed_events.append((entity.lower(), relation.lower(), date_str.lower()))
-
         # Combine with existing timeline
-        all_events = list(current_timeline) + processed_events
+        all_events = list(current_timeline) + new_events
 
         # Remove duplicates while preserving order
         seen = set()
@@ -277,7 +292,7 @@ class ChemoTimelineBuilder(dspy.Module):
                 seen.add(event)
                 unique_events.append(event)
 
-        return sorted(unique_events)
+        return sorted(unique_events, key=lambda x: (x[2].year, x[2].month or 0, x[2].day_of_month or 0, x[2].week or 0, x[0], x[1]))  # Sort by date, then by drug and relation
 
     def evaluate_and_update_timeline(self, timeline, content, reasoning):
         """Process content and update timeline"""
@@ -289,7 +304,7 @@ class ChemoTimelineBuilder(dspy.Module):
             content = output["Timeline"]
 
         # Update timeline with new content
-        output = self.retry(self.update_lm, previous_timeline=timeline, chunk_content=content)
+        output = self.retry(self.update_lm, timeline=timeline, chunk_content=content)
         if output.get("reasoning"):
             reasoning.append(output["reasoning"])
 
@@ -316,6 +331,9 @@ class ChemoTimelineBuilder(dspy.Module):
             chunk_set = chunks[i:i + self.intermediate_chunks]
             content = "\n".join(chunk_set)
             timeline = self.evaluate_and_update_timeline(timeline, content, reasoning)
+
+        # Convert dates to strings
+        timeline = [(drug, relation, convert_date_to_string(date)) for drug, relation, date in timeline]
 
         return sorted(timeline)
 
@@ -493,7 +511,7 @@ if __name__ == "__main__":
     #     print(f"Large context window model ({acc_large}) outperformed small context window model ({acc_small}).")
     #     builder = fewshot
     
-    _, _, builder = evaluate(train_data, dev_data, ChemoTimelineBuilder())
+    _, _, builder = evaluate(train_data, dev_data, ChemoTimelineBuilder(), optimize=False)
 
     jsons = defaultdict(dict)
     for split in ["train", "dev"]:
