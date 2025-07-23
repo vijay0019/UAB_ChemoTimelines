@@ -1,0 +1,9 @@
+ipykernel
+ipython
+matplotlib
+pandas
+pydantic==2.11.4
+pynvml
+scikit-learn
+tiktoken
+tqdm
