@@ -79,7 +79,7 @@ def parse_value(value, annotation):
 
 class MyChatAdapter(dspy.ChatAdapter):
     def parse(self, signature: Type[Signature], completion: str) -> dict[str, Any]:
-        print(f"Completion before postprocessing: {completion}")
+        # print(f"Completion before postprocessing: {completion}")
         reasoning = re.search(r"<think>(.*?)</think>", completion, flags=re.DOTALL)
         if reasoning:
             reasoning = reasoning.group(1).strip()
@@ -159,7 +159,7 @@ class MyChatAdapter(dspy.ChatAdapter):
             completion = re.sub(r".*year=None.*", "", completion)
         completion = re.sub("### Step-by-step Reasoning", "[[ ## reasoning ## ]]", completion)
         completion = re.sub(r"\[\[ ## Timeline ## \]\] Update", "[[ ## timeline_update ## ]]", completion)
-        print(f"Completion after postprocessing: {completion}")
+        # print(f"Completion after postprocessing: {completion}")
         if missing_field:
             pass
             # print(
