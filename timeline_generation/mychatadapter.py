@@ -79,7 +79,7 @@ def parse_value(value, annotation):
 
 class MyChatAdapter(dspy.ChatAdapter):
     def parse(self, signature: Type[Signature], completion: str) -> dict[str, Any]:
-        # print(f"Completion before postprocessing: {completion}")
+        print(f"Completion before postprocessing: {completion}")
         reasoning = re.search(r"<think>(.*?)</think>", completion, flags=re.DOTALL)
         if reasoning:
             reasoning = reasoning.group(1).strip()
@@ -147,8 +147,6 @@ class MyChatAdapter(dspy.ChatAdapter):
             completion = re.sub(r"year=(\d+)\)\)", r"year=\1, month=None, day_of_month=None, week=None))", completion)
             completion = re.sub(r"month=(\d+)\)\)", r"month=\1, day_of_month=None, week=None))", completion)
             completion = re.sub(r"day_of_month=(\d+)\)\)", r"day_of_month=\1, week=None))", completion)
-            # adds extraneous text after Date object
-            completion = re.sub(r"(\[\[ ## cleaned_timeline ## \]\]\n\[.*?\]).*?\[\[ ## completed ## \]\]", r"\1\n[[ ## completed ## ]]", completion, flags=re.DOTALL)
             # forgets to name components of Date
             completion = re.sub(r"Date\((\d+), (\d+|None), (\d+|None), (\d+|None)\)", r"Date(year=\1, month=\2, day_of_month=\3, week=\4)", completion)
             completion = re.sub(r"Date\((\d+), (\d+), (\d+)\)", r"Date(year=\1, month=\2, day_of_month=\3, week=None)", completion)
@@ -157,9 +155,11 @@ class MyChatAdapter(dspy.ChatAdapter):
             # ? not sure why this is happening
             completion = re.sub(r"(day_of_month=\d+), day_of_month=None", r"\1", completion)
             completion = re.sub(r".*year=None.*", "", completion)
+        # adds extraneous text after list
+        completion = re.sub(r"(\[\[ ## remove ## \]\]\n\[.*?\]).*", r"\1\n[[ ## completed ## ]]", completion, flags=re.DOTALL)
         completion = re.sub("### Step-by-step Reasoning", "[[ ## reasoning ## ]]", completion)
         completion = re.sub(r"\[\[ ## Timeline ## \]\] Update", "[[ ## timeline_update ## ]]", completion)
-        # print(f"Completion after postprocessing: {completion}")
+        print(f"Completion after postprocessing: {completion}")
         if missing_field:
             pass
             # print(
