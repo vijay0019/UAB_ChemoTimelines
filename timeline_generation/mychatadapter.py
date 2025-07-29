@@ -29,7 +29,7 @@ class Date(NamedTuple):
 	year: int
 	month: int|None
 	day_of_month: int|None
-	week: int|None
+	week_of_year: int|None
 
 
 def parse_value(value, annotation):
@@ -87,6 +87,7 @@ class MyChatAdapter(dspy.ChatAdapter):
         else:
             reasoning = ""
         sections = [(None, [])]
+        completion = re.sub(r"Literal\['finish'\]", r"finish", completion)
         completion = re.sub(r"Literal(\[.*?\])", r"\1", completion)
         completion = re.sub(r"```(?:python|json|markdown|plaintext)\n(.*?)\n```", r"\1", completion, flags=re.DOTALL)
         completion = re.sub(r"```(?:python|json|markdown|plaintext)?", "", completion, flags=re.DOTALL)
@@ -106,7 +107,6 @@ class MyChatAdapter(dspy.ChatAdapter):
         completion = completion.replace("### [[ ##", "[[ ##")
         completion = re.sub(r"### Timeline:?", "[[ ## Timeline ## ]]", completion)
         completion = re.sub(r"### Reasoning:?", "[[ ## reasoning ## ]]", completion)
-        completion = completion.replace(": null", ': "deceased"')
         completion = completion.replace("]]\n\n", "]]\n")
         completion = re.sub('"True"', "True", completion, flags=re.IGNORECASE)
         completion = re.sub('"False"', "False", completion, flags=re.IGNORECASE)
@@ -137,26 +137,29 @@ class MyChatAdapter(dspy.ChatAdapter):
         completion = completion.replace("### [[## Reasoning ##]]", "[[ ## reasoning ## ]]")
         ### NEW FOR COMPETITION
         completion = re.sub("null", "None", completion, flags=re.IGNORECASE)
-        # doesn't use Date object
-        completion = re.sub(r"\[(\d+), (\d+|None), (\d+|None), (\d+|None)\]", r"Date(year=\1, month=\2, day_of_month=\3, week=\4)", completion)
-        completion = re.sub(r"\[(\d+), (\d+), (\d+)\]", r"Date(year=\1, month=\2, day_of_month=\3, week=None)", completion)
-        completion = re.sub(r"\[(\d+), (\d+)\]", r"Date(year=\1, month=\2, day_of_month=None, week=None)", completion)
-        completion = re.sub(r"\[(\d+)\]", r"Date(year=\1, month=None, day_of_month=None, week=None)", completion)
+        if "next_tool_name" in completion:
+            completion = re.sub(r"(\[\[ ## next_tool_name ## \]\]\s+)[^a-z0-9_\n]+([a-z0-9_]+)[^a-z0-9_\n]+", r"\1\2", completion)
+        else:
+            # doesn't use Date object
+            completion = re.sub(r"\[(\d+), (\d+|None), (\d+|None), (\d+|None)\]", r"Date(year=\1, month=\2, day_of_month=\3, week_of_year=\4)", completion)
+            completion = re.sub(r"\[(\d+), (\d+), (\d+)\]", r"Date(year=\1, month=\2, day_of_month=\3, week_of_year=None)", completion)
+            completion = re.sub(r"\[(\d+), (\d+)\]", r"Date(year=\1, month=\2, day_of_month=None, week_of_year=None)", completion)
+            completion = re.sub(r"\[(\d+)\]", r"Date(year=\1, month=None, day_of_month=None, week_of_year=None)", completion)
         if "Date(" in completion:
             # forgets to include all components of Date
-            completion = re.sub(r"year=(\d+)\)\)", r"year=\1, month=None, day_of_month=None, week=None))", completion)
-            completion = re.sub(r"month=(\d+)\)\)", r"month=\1, day_of_month=None, week=None))", completion)
-            completion = re.sub(r"day_of_month=(\d+)\)\)", r"day_of_month=\1, week=None))", completion)
+            completion = re.sub(r"Date\(year=(\d+)\)\)", r"Date(year=\1, month=None, day_of_month=None, week_of_year=None))", completion)
+            completion = re.sub(r"month=(\d+)\)\)", r"month=\1, day_of_month=None, week_of_year=None))", completion)
+            completion = re.sub(r"day_of_month=(\d+)\)\)", r"day_of_month=\1, week_of_year=None))", completion)
             # forgets to name components of Date
-            completion = re.sub(r"Date\((\d+), (\d+|None), (\d+|None), (\d+|None)\)", r"Date(year=\1, month=\2, day_of_month=\3, week=\4)", completion)
-            completion = re.sub(r"Date\((\d+), (\d+), (\d+)\)", r"Date(year=\1, month=\2, day_of_month=\3, week=None)", completion)
-            completion = re.sub(r"Date\((\d+), (\d+)\)", r"Date(year=\1, month=\2, day_of_month=None, week=None)", completion)
-            completion = re.sub(r"Date\((\d+)\)", r"Date(year=\1, month=None, day_of_month=None, week=None)", completion)
+            completion = re.sub(r"Date\((\d+), (\d+|None), (\d+|None), (\d+|None)\)", r"Date(year=\1, month=\2, day_of_month=\3, week_of_year=\4)", completion)
+            completion = re.sub(r"Date\((\d+), (\d+), (\d+)\)", r"Date(year=\1, month=\2, day_of_month=\3, week_of_year=None)", completion)
+            completion = re.sub(r"Date\((\d+), (\d+)\)", r"Date(year=\1, month=\2, day_of_month=None, week_of_year=None)", completion)
+            completion = re.sub(r"Date\((\d+)\)", r"Date(year=\1, month=None, day_of_month=None, week_of_year=None)", completion)
             # ? not sure why this is happening
             completion = re.sub(r"(day_of_month=\d+), day_of_month=None", r"\1", completion)
-            completion = re.sub(r".*year=None.*", "", completion)
+            completion = re.sub(r"Date\(year=None.*", "", completion)
         # adds extraneous text after list
-        completion = re.sub(r"(\[\[ ## remove ## \]\]\n\[.*?\]).*", r"\1\n[[ ## completed ## ]]", completion, flags=re.DOTALL)
+        completion = re.sub(r"(\[\[ ## remove ## \]\]\n\[.*?\]).*", r"\1\n\n[[ ## completed ## ]]", completion, flags=re.DOTALL)
         completion = re.sub("### Step-by-step Reasoning", "[[ ## reasoning ## ]]", completion)
         completion = re.sub(r"\[\[ ## Timeline ## \]\] Update", "[[ ## timeline_update ## ]]", completion)
         print(f"Completion after postprocessing: {completion}")
