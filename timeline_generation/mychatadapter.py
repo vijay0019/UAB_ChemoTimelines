@@ -24,12 +24,35 @@ from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 
 field_header_pattern = re.compile(r"\[\[ ## (\w+) ## \]\]")
 
+CHEMO_DRUGS = ["a.c", "a/c", "abraxane", "ac", "adriamycin", "aflibercept", "albumin-bound paclitaxel",
+               "alfa-2b interferon", "alibercept", "alpha-2b interferon", "anastrozole", "arimidex",
+               "avastin", "bevacizumab", "caboplatin", "cabotaxol", "carbo", "carboplatin", "carbotaxol",
+               "chemo", "chemotherapy", "cisplatin", "cistoplatin", "cyclophosphamide", "cytoxan",
+               "docetaxel", "docetaxol", "doxil", "doxorubicin", "faslodex", "femara", "gemcitabine",
+               "gemzar", "herceptin", "il-2", "il2", "interferon", "interleukin-2", "ipilimumab", "kadcyla",
+               "liposomal doxorubicin", "methotrexate", "paclitaxel", "tamoxifen", "tax", "taxol",
+               "taxotere", "tc", "tch", "temozolomide", "vaccinia", "vaccinia virus", "zometa", "zelboraf"]
+
+Relation = Literal[
+    "begins-on",
+    "ends-on",
+    "contains-1"
+]
+
 
 class Date(NamedTuple):
-	year: int
-	month: int|None
-	day_of_month: int|None
-	week_of_year: int|None
+    year: int
+    month: int | None
+    day_of_month: int | None
+    week_of_year: int | None
+
+
+Timeline = list[tuple[Literal[*CHEMO_DRUGS], Relation, Date]]
+
+
+class Update(NamedTuple):
+    add: Timeline
+    remove: Timeline
 
 
 def parse_value(value, annotation):
@@ -79,7 +102,7 @@ def parse_value(value, annotation):
 
 class MyChatAdapter(dspy.ChatAdapter):
     def parse(self, signature: Type[Signature], completion: str) -> dict[str, Any]:
-        print(f"Completion before postprocessing: {completion}")
+        # print(f"Completion before postprocessing: {completion}")
         reasoning = re.search(r"<think>(.*?)</think>", completion, flags=re.DOTALL)
         if reasoning:
             reasoning = reasoning.group(1).strip()
@@ -106,7 +129,7 @@ class MyChatAdapter(dspy.ChatAdapter):
         completion = re.sub(r"\}(?!.*\}).*?$", "}\n\n[[ ## completed ## ]]", completion, flags=re.DOTALL)
         completion = completion.replace("### [[ ##", "[[ ##")
         completion = re.sub(r"### Timeline:?", "[[ ## Timeline ## ]]", completion)
-        completion = re.sub(r"### Reasoning:?", "[[ ## reasoning ## ]]", completion)
+        completion = re.sub(r"### Reasoning:?$", "[[ ## reasoning ## ]]", completion)
         completion = completion.replace("]]\n\n", "]]\n")
         completion = re.sub('"True"', "True", completion, flags=re.IGNORECASE)
         completion = re.sub('"False"', "False", completion, flags=re.IGNORECASE)
@@ -159,10 +182,12 @@ class MyChatAdapter(dspy.ChatAdapter):
             completion = re.sub(r"(day_of_month=\d+), day_of_month=None", r"\1", completion)
             completion = re.sub(r"Date\(year=None.*", "", completion)
         # adds extraneous text after list
-        completion = re.sub(r"(\[\[ ## remove ## \]\]\n\[.*?\]).*", r"\1\n\n[[ ## completed ## ]]", completion, flags=re.DOTALL)
-        completion = re.sub("### Step-by-step Reasoning", "[[ ## reasoning ## ]]", completion)
+        completion = completion.replace("Update([])", "Update(add=[], remove=[])")
+        completion = re.sub(r"(\[\[ ## update ## \]\]\n).*?(Update\(\s*add=\[.*?\],\s*remove=\[.*?\]\s*\)).*", r"\1\2\n\n[[ ## completed ## ]]", completion, flags=re.DOTALL)
+        if "[[ ## reasoning ## ]]" not in completion:
+            completion = re.sub("### Step-by-step Reasoning", "[[ ## reasoning ## ]]", completion)
         completion = re.sub(r"\[\[ ## Timeline ## \]\] Update", "[[ ## timeline_update ## ]]", completion)
-        print(f"Completion after postprocessing: {completion}")
+        # print(f"Completion after postprocessing: {completion}")
         if missing_field:
             pass
             # print(
