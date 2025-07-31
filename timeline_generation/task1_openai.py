@@ -393,15 +393,6 @@ if __name__ == "__main__":
                 "reports": reports,
                 "timeline": data[split]["timeline"][patient]
             }).with_inputs("reports")
-        if split == "train":
-            subset = {}
-            for site in set(key.split('_')[0] for key in new_data.keys()):
-                site_patients = [key for key in new_data.keys() if key.startswith(site)]
-                # select top 20 patients with shortest total report length
-                site_patients.sort(key=lambda x: len(tokenizer.encode(str(new_data[x]["reports"]))) if new_data[x]["timeline"] else float('inf'))
-                subset.update({key: new_data[key] for key in site_patients[:20]})
-            new_data = subset
-        data[split] = new_data
 
     train_data = list(data["train"].values())
     dev_data = list(data["dev"].values())
