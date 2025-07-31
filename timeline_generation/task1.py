@@ -8,7 +8,7 @@ import dspy
 import pynvml
 import tiktoken
 import xmltodict
-from typing_extensions import NamedTuple, Literal
+from typing_extensions import NamedTuple, Literal, Any
 
 from eval_for_optim import evaluation_f1
 from mychatadapter import *
@@ -86,7 +86,7 @@ class PatientReport(NamedTuple):
     ID: int
     type: str
     text: str
-    temporal_relations: list[dict]
+    temporal_relations: list[list[tuple[str, Any]]]
 
 
 def convert_date_to_string(date: Date) -> str:
@@ -135,6 +135,8 @@ Try to be as specific as possible, but do not invent dates that are not mentione
 
 Keep in mind that the reports are only a subset of the full timeline, so there may be events in the timeline that are not mentioned in the reports. Do not remove events simply because they are not mentioned in the reports.
 
+If a report doesn't have temporal relations, that likely means the report does not contain any relevant information for the timeline.
+
 Example output format:
 [[ ## update ## ]]
 Update(
@@ -164,10 +166,11 @@ Update(
 
 
 class SACTTimelineBuilder(dspy.Module):
-    def __init__(self, max_iter=3):
+    def __init__(self, max_iter=3, max_reports=10):
         super().__init__()
         self.update_lm = dspy.ChainOfThought(SACTTimelineUpdate)
         self.max_iter = max_iter
+        self.max_reports = max_reports
 
     def retry(self, func, **kwargs):
         for model in MODELS:
@@ -216,19 +219,25 @@ class SACTTimelineBuilder(dspy.Module):
 
         return timeline
 
-    def forward(self, reports: list[str]):
+    def forward(self, reports: list[PatientReport]) -> dspy.Prediction:
         """Build timeline from text reports"""
         # Initialize
         timeline = []
         reasoning = []
         
         random.seed(42)
+        
+        # Create clumps of reports that fit within context window
+        report_clumps = self._create_report_clumps(reports, target_size=CONTEXT_WINDOW // 8)
+        
+        # Limit iterations based on max_reports
+        max_iter = math.ceil(self.max_iter * min(self.max_reports / len(report_clumps), 1))
 
-        # Process reports
-        for i in range(self.max_iter):
-            random.shuffle(reports)  # Shuffle reports to avoid bias
-            for report in reports:
-                timeline = self.evaluate_and_update_timeline(timeline, report, reasoning)
+        # Process report clumps
+        for i in range(max_iter):
+            random.shuffle(report_clumps)  # Shuffle clumps to avoid bias
+            for clump in tqdm(report_clumps, desc=f"Processing report clumps (iteration {i + 1}/{max_iter})"):
+                timeline = self.evaluate_and_update_timeline(timeline, clump, reasoning)
             if not timeline:
                 break # If no timeline was generated, stop early
 
@@ -239,6 +248,43 @@ class SACTTimelineBuilder(dspy.Module):
             timeline=timeline,
             reasoning="\n\n\n".join(reasoning)
         )
+    
+    def _create_report_clumps(self, reports: list[PatientReport], target_size: int) -> list[list[PatientReport]]:
+        """Create clumps of reports that fit within the target token size"""
+        # Check if all reports fit in one clump
+        total_tokens = len(tokenizer.encode(str(reports)))
+        if len(reports) == 1 or total_tokens < target_size:
+            return [reports]
+        
+        # Group reports by report ID
+        report_groups = {}
+        for report in reports:
+            if report.ID not in report_groups:
+                report_groups[report.ID] = []
+            report_groups[report.ID].append(report)
+        
+        # Sort groups by ID for consistent processing
+        sorted_groups = [report_groups[id] for id in sorted(report_groups.keys())]
+        
+        # Use greedy approach to create clumps within target size
+        clumps = []
+        current_clump = sorted_groups[0] if sorted_groups else []
+        target_per_clump = math.ceil(total_tokens / math.ceil(total_tokens / target_size))
+        
+        for group in sorted_groups[1:]:
+            # Check if adding the next group exceeds the target size
+            test_clump = current_clump + group
+            if len(tokenizer.encode(str(test_clump))) < target_per_clump:
+                current_clump = test_clump
+            else:
+                clumps.append(current_clump)
+                current_clump = group
+        
+        # Add the last clump
+        if current_clump:
+            clumps.append(current_clump)
+        
+        return clumps
 
 
 def evaluate(train, dev, zeroshot, optimize=True):
@@ -326,58 +372,7 @@ def add_to_temporal_relations(ent_rel, text, temporal_relations, needs_id):
             start, end = [int(x) for x in ent_rel['span'].split(',')]
             # del ent_rel['span']
             ent_rel['text'] = text[start:end]
-        temporal_relations.append(ent_rel)
-
-
-def concatenate_reports(data, target):
-    data = data.copy()
-    # Concatenate reports intelligently to fit within the context window
-    for split in data:
-        items = list(data[split]["reports"].items())
-        for key, value in items:
-            # Concatenate reports if they fit within the context window
-            n = len(tokenizer.encode(str(value)))
-            if len(value) == 1 or n < target:
-                data[split]["reports"][key] = [value]
-            # If more than one report, concatenate them intelligently
-            else:
-                # Group reports by report ID
-                report_groups = [[v for v in value if v.ID == i] for i in sorted(set(v.ID for v in value))]
-                # Concatenate groups while respecting the context window
-                # Use a greedy approach to concatenate as many groups as possible without exceeding the context window
-                # This is a simple heuristic and may not be optimal
-                concatenated_groups = []
-                current_group = report_groups[0]
-                target_ = math.ceil(n / math.ceil(n / target))
-                for report_group in report_groups[1:]:
-                    # Check if adding the next group exceeds the context window
-                    if len(tokenizer.encode(str(current_group + report_group))) < target_:
-                        current_group += report_group
-                    else:
-                        concatenated_groups.append(current_group)
-                        current_group = report_group
-                concatenated_groups.append(current_group)
-                data[split]["reports"][key] = concatenated_groups
-
-    # Rearrange data structure
-    for split in data:
-        new_data = {}
-        for patient, reports in data[split]["reports"].items():
-            new_data[patient] = dspy.Example({
-                "reports": reports,
-                "timeline": data[split]["timeline"][patient]
-            }).with_inputs("reports")
-        if split == "train":
-            subset = {}
-            for site in set(key.split('_')[0] for key in new_data.keys()):
-                site_patients = [key for key in new_data.keys() if key.startswith(site)]
-                # select top 20 patients with shortest total report length
-                site_patients.sort(key=lambda x: len(tokenizer.encode(str(new_data[x]["reports"]))) if new_data[x]["timeline"] else float('inf'))
-                subset.update({key: new_data[key] for key in site_patients[:20]})
-            new_data = subset
-        data[split] = new_data
-
-    return data
+        temporal_relations.append(sorted(ent_rel.items()))  # Sort items to ensure consistent order
 
 
 if __name__ == "__main__":
@@ -428,8 +423,23 @@ if __name__ == "__main__":
                     PatientReport(ID=ID, type=report_type(report), text=text,
                                   temporal_relations=temporal_relations))
 
-    data_old = deepcopy(data)
-    data = concatenate_reports(data, target=CONTEXT_WINDOW / 8)
+    # Rearrange data structure
+    for split in data:
+        new_data = {}
+        for patient, reports in data[split]["reports"].items():
+            new_data[patient] = dspy.Example({
+                "reports": reports,
+                "timeline": data[split]["timeline"][patient]
+            }).with_inputs("reports")
+        if split == "train":
+            subset = {}
+            for site in set(key.split('_')[0] for key in new_data.keys()):
+                site_patients = [key for key in new_data.keys() if key.startswith(site)]
+                # select top 20 patients with shortest total report length
+                site_patients.sort(key=lambda x: len(tokenizer.encode(str(new_data[x]["reports"]))) if new_data[x]["timeline"] else float('inf'))
+                subset.update({key: new_data[key] for key in site_patients[:20]})
+            new_data = subset
+        data[split] = new_data
 
     train_data = list(data["train"].values())
     dev_data = list(data["dev"].values())

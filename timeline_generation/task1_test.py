@@ -8,7 +8,7 @@ import dspy
 import pynvml
 import tiktoken
 import xmltodict
-from typing_extensions import NamedTuple, Literal, Any, Optional
+from typing_extensions import NamedTuple, Literal
 
 from eval_for_optim import evaluation_f1
 from mychatadapter import *
@@ -86,7 +86,7 @@ class PatientReport(NamedTuple):
     ID: int
     type: str
     text: str
-    temporal_relations: list[list[tuple[str, Any]]]
+    temporal_relations: list[dict]
 
 
 def convert_date_to_string(date: Date) -> str:
@@ -99,47 +99,6 @@ def convert_date_to_string(date: Date) -> str:
             return f"{date.year}-{date.month:02d}"
         return f"{date.year}-{date.month:02d}-{date.day_of_month:02d}"
     return f"{date.year}-w{date.week_of_year:02d}"
-
-
-# Agentic tools
-
-
-def offset_date(date: tuple[int, Optional[int], Optional[int], Optional[int]], offset_in_days: int) -> Date:
-    from datetime import datetime, timedelta
-    """
-    Get exact date based on an anchor date and offset in days.
-    The date is specified as a tuple (year, month, day_of_month, week_of_year).
-    """
-    anchor_date = datetime(date[0], date[1] or 1, date[2] or 1)
-    new_date = anchor_date + timedelta(days=offset_in_days)
-    return (new_date.year, new_date.month, new_date.day, None)  # week_of_year is not used here
-
-
-def coarsen_date(date: tuple[int, Optional[int], Optional[int], Optional[int]], min_offset_in_days: int = 0, max_offset_in_days: int = 0) -> Date:
-    from datetime import datetime, timedelta
-    """
-    Get inexact date based on an anchor date and offset in days.
-    The date is specified as a tuple (year, month, day_of_month, week_of_year).
-    """
-    anchor_date = datetime(date[0], date[1] or 1, date[2] or 1)
-    start_date = anchor_date + timedelta(days=min_offset_in_days)
-    end_date = anchor_date + timedelta(days=max_offset_in_days)
-    if start_date.weekday() == 6:  # Sunday
-        start_date += timedelta(days=1)
-    elif start_date.weekday() == 5:  # Saturday
-        start_date += timedelta(days=2)
-    if end_date.weekday() == 6:  # Sunday
-        end_date -= timedelta(days=2)
-    elif end_date.weekday() == 5:  # Saturday
-        end_date -= timedelta(days=1)
-    start_week = start_date.isocalendar()[1]
-    end_week = end_date.isocalendar()[1]
-    if start_date.year == end_date.year and start_week == end_week:
-        return (start_date.year, None, None, start_week)
-    elif start_date.year == end_date.year and start_date.month == end_date.month:
-        return (start_date.year, start_date.month, None, None)
-    else:
-        return (start_date.year, None, None, None)
 
 
 class SACTTimelineUpdate(dspy.Signature):
@@ -167,11 +126,14 @@ Relations:
 - 'contains-1': treatment occurred within timeframe
 'begins-on' and 'ends-on' supersede 'contains-1' for the same drug/date combination. Only use them if the text explicitly states the start or end date of the treatment.
 
-Use the tools provided to help you determine the proper date format if exact date is either offset or unknown (for instance, if the text mentions "chemotherapy started four weeks ago" and the document date is 2023-10-01, use the tool: coarsen_date((2023, 10, 1, None), -28, -21) to get an approximation). Don't be afraid to only specify year and week/month (or even only year) if the exact day is not mentioned in the text. However, if the text specifies an exact date, use that date.
+Acceptable date formats:
+1. Specify year, month, and day.
+2. Specify year and week.
+3. Specify year and month.
+4. Specify year only.
+Try to be as specific as possible, but do not invent dates that are not mentioned in the text.
 
 Keep in mind that the reports are only a subset of the full timeline, so there may be events in the timeline that are not mentioned in the reports. Do not remove events simply because they are not mentioned in the reports.
-
-If a report doesn't have temporal relations, that likely means the report does not contain any relevant information for the timeline.
 
 Example output format:
 [[ ## update ## ]]
@@ -204,7 +166,7 @@ Update(
 class SACTTimelineBuilder(dspy.Module):
     def __init__(self, max_iter=3, max_reports=10):
         super().__init__()
-        self.update_lm = dspy.ReAct(SACTTimelineUpdate, tools=[offset_date, coarsen_date])
+        self.update_lm = dspy.ChainOfThought(SACTTimelineUpdate)
         self.max_iter = max_iter
         self.max_reports = max_reports
 
@@ -263,17 +225,14 @@ class SACTTimelineBuilder(dspy.Module):
         
         random.seed(42)
         
-        # Create clumps of reports that fit within context window
-        report_clumps = self._create_report_clumps(reports, target_size=CONTEXT_WINDOW // 8)
-        
-        # Limit iterations based on max_reports
-        max_iter = math.ceil(self.max_iter * min(self.max_reports / len(report_clumps), 1))
+        # Limit reports to max_reports
+        max_iter = math.ceil(self.max_iter * min(self.max_reports / len(reports), 1))
 
-        # Process report clumps
+        # Process reports
         for i in range(max_iter):
-            random.shuffle(report_clumps)  # Shuffle clumps to avoid bias
-            for clump in tqdm(report_clumps, desc=f"Processing report clumps (iteration {i + 1}/{max_iter})"):
-                timeline = self.evaluate_and_update_timeline(timeline, clump, reasoning)
+            random.shuffle(reports)  # Shuffle reports to avoid bias
+            for report in tqdm(reports, desc=f"Processing reports (iteration {i + 1}/{max_iter})"):
+                timeline = self.evaluate_and_update_timeline(timeline, report, reasoning)
             if not timeline:
                 break # If no timeline was generated, stop early
 
@@ -284,43 +243,6 @@ class SACTTimelineBuilder(dspy.Module):
             timeline=timeline,
             reasoning="\n\n\n".join(reasoning)
         )
-    
-    def _create_report_clumps(self, reports: list[PatientReport], target_size: int) -> list[list[PatientReport]]:
-        """Create clumps of reports that fit within the target token size"""
-        # Check if all reports fit in one clump
-        total_tokens = len(tokenizer.encode(str(reports)))
-        if len(reports) == 1 or total_tokens < target_size:
-            return [reports]
-        
-        # Group reports by report ID
-        report_groups = {}
-        for report in reports:
-            if report.ID not in report_groups:
-                report_groups[report.ID] = []
-            report_groups[report.ID].append(report)
-        
-        # Sort groups by ID for consistent processing
-        sorted_groups = [report_groups[id] for id in sorted(report_groups.keys())]
-        
-        # Use greedy approach to create clumps within target size
-        clumps = []
-        current_clump = sorted_groups[0] if sorted_groups else []
-        target_per_clump = math.ceil(total_tokens / math.ceil(total_tokens / target_size))
-        
-        for group in sorted_groups[1:]:
-            # Check if adding the next group exceeds the target size
-            test_clump = current_clump + group
-            if len(tokenizer.encode(str(test_clump))) < target_per_clump:
-                current_clump = test_clump
-            else:
-                clumps.append(current_clump)
-                current_clump = group
-        
-        # Add the last clump
-        if current_clump:
-            clumps.append(current_clump)
-        
-        return clumps
 
 
 def evaluate(train, dev, zeroshot, optimize=True):
@@ -408,7 +330,58 @@ def add_to_temporal_relations(ent_rel, text, temporal_relations, needs_id):
             start, end = [int(x) for x in ent_rel['span'].split(',')]
             # del ent_rel['span']
             ent_rel['text'] = text[start:end]
-        temporal_relations.append(sorted(ent_rel.items()))  # Sort items to ensure consistent order
+        temporal_relations.append(ent_rel)
+
+
+def concatenate_reports(data, target):
+    data = data.copy()
+    # Concatenate reports intelligently to fit within the context window
+    for split in data:
+        items = list(data[split]["reports"].items())
+        for key, value in items:
+            # Concatenate reports if they fit within the context window
+            n = len(tokenizer.encode(str(value)))
+            if len(value) == 1 or n < target:
+                data[split]["reports"][key] = [value]
+            # If more than one report, concatenate them intelligently
+            else:
+                # Group reports by report ID
+                report_groups = [[v for v in value if v.ID == i] for i in sorted(set(v.ID for v in value))]
+                # Concatenate groups while respecting the context window
+                # Use a greedy approach to concatenate as many groups as possible without exceeding the context window
+                # This is a simple heuristic and may not be optimal
+                concatenated_groups = []
+                current_group = report_groups[0]
+                target_ = math.ceil(n / math.ceil(n / target))
+                for report_group in report_groups[1:]:
+                    # Check if adding the next group exceeds the context window
+                    if len(tokenizer.encode(str(current_group + report_group))) < target_:
+                        current_group += report_group
+                    else:
+                        concatenated_groups.append(current_group)
+                        current_group = report_group
+                concatenated_groups.append(current_group)
+                data[split]["reports"][key] = concatenated_groups
+
+    # Rearrange data structure
+    for split in data:
+        new_data = {}
+        for patient, reports in data[split]["reports"].items():
+            new_data[patient] = dspy.Example({
+                "reports": reports,
+                "timeline": data[split]["timeline"][patient]
+            }).with_inputs("reports")
+        if split == "train":
+            subset = {}
+            for site in set(key.split('_')[0] for key in new_data.keys()):
+                site_patients = [key for key in new_data.keys() if key.startswith(site)]
+                # select top 20 patients with shortest total report length
+                site_patients.sort(key=lambda x: len(tokenizer.encode(str(new_data[x]["reports"]))) if new_data[x]["timeline"] else float('inf'))
+                subset.update({key: new_data[key] for key in site_patients[:20]})
+            new_data = subset
+        data[split] = new_data
+
+    return data
 
 
 if __name__ == "__main__":
@@ -417,17 +390,35 @@ if __name__ == "__main__":
     from copy import deepcopy
     from tqdm import tqdm
 
-    task1_path = "../../chemoTimelines2024_train_dev_labeled/subtask1"
+    task1_path = "../../chemoTimelines2025_test_data/subtask1"
 
     notes_path = os.path.join(task1_path, "Patient_Notes")
     xml_path = os.path.join(task1_path, "Gold_PairWise_Annotations")
     timelines_path = os.path.join(task1_path, "Gold_Timelines_allPatients_processed")
 
-    data = {split: {"reports": defaultdict(list), "timeline": {}} for split in ["train", "dev"]}
+    data = {split: {"reports": defaultdict(list), "timeline": {}} for split in ["test"]}
+    
+    # build empty timeline for each patient
+    for site in os.listdir(notes_path):
+        for split in ["test"]:
+            for patient in os.listdir(os.path.join(notes_path, site, split)):
+                data[split]["timeline"][f"{site}_{patient}"] = []
+    # Ensure directories exist
+    os.makedirs(timelines_path, exist_ok=True)
+    # make a "gold" timeline file for each site-split combination
+    for split in ["test"]:
+        for site in os.listdir(notes_path):
+            for patient in os.listdir(os.path.join(notes_path, site, split)):
+                split_site_patient = f"{split}_{site}_{patient}"
+                if not os.path.exists(os.path.join(timelines_path, f"{split_site_patient}.json")):
+                    with open(os.path.join(timelines_path, f"{split_site_patient}.json"), 'w') as f:
+                        json.dump({}, f, indent=2)
 
     # Load timelines and notes
     report_type = lambda x: x.split('_')[-1].strip(".txt").upper()
-    for file in os.listdir(timelines_path):
+    timeline_paths = os.listdir(timelines_path)
+    random.shuffle(timeline_paths)
+    for file in timeline_paths:
         if file.endswith(".json"):
             split, site, patient = file[:-5].split("_")
             with open(os.path.join(timelines_path, file), 'r') as f:
@@ -477,16 +468,14 @@ if __name__ == "__main__":
             new_data = subset
         data[split] = new_data
 
-    train_data = list(data["train"].values())
-    dev_data = list(data["dev"].values())
+    test_data = list(data["test"].values())
 
-    print(f"Train examples: {len(train_data)}")
-    print(f"Dev examples: {len(dev_data)}")
+    print(f"Test examples: {len(test_data)}")
 
-    _, _, builder = evaluate(train_data, dev_data, SACTTimelineBuilder(), optimize=True)
+    builder = SACTTimelineBuilder()
 
     jsons = defaultdict(dict)
-    for split in ["train", "dev"]:
+    for split in ["test"]:
         for key, value in tqdm(data[split].items(), desc=f"Processing {split} data"):
             site, patient = key.split('_')
             generated = builder(value["reports"])

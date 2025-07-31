@@ -186,7 +186,7 @@ class MyChatAdapter(dspy.ChatAdapter):
         completion = re.sub(r"(\[\[ ## update ## \]\]\n).*?(Update\(\s*add=\[.*?\],\s*remove=\[.*?\]\s*\)).*", r"\1\2\n\n[[ ## completed ## ]]", completion, flags=re.DOTALL)
         if "[[ ## reasoning ## ]]" not in completion:
             completion = re.sub("### Step-by-step Reasoning", "[[ ## reasoning ## ]]", completion)
-        completion = re.sub(r"\[\[ ## Timeline ## \]\] Update", "[[ ## timeline_update ## ]]", completion)
+        completion = re.sub(r"\[\[ ## Timeline ## \]\] Update", "[[ ## update ## ]]", completion)
         # print(f"Completion after postprocessing: {completion}")
         if missing_field:
             pass
