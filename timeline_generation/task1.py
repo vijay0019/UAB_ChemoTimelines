@@ -178,8 +178,8 @@ class SACTTimelineBuilder(dspy.Module):
                 return output
 
         # raise RuntimeError(f"Failed to get valid response after {MAX_RETRIES} retries.")
-        if output["timeline_update"] is None:
-            output["timeline_update"] = []
+        if output["update"] is None:
+            output["update"] = []
         return output
 
     def process_timeline_update(self, current_timeline, update):
