@@ -23,7 +23,7 @@ MAX_RETRIES = 2
 
 
 class ThreadSafeOllamaLM(dspy.LM):
-    def __init__(self, ports=(11438,), **kwargs):
+    def __init__(self, ports=(11436,), **kwargs):
         self.lms = []
         # self._counter = random.randint(0, len(ports) - 1)
         # self._lock = threading.Lock()
