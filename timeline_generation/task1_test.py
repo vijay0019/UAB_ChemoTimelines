@@ -135,7 +135,7 @@ Try to be as specific as possible, but do not invent dates that are not mentione
 
 Keep in mind that the reports are only a subset of the full timeline, so there may be events in the timeline that are not mentioned in the reports. Do not remove events simply because they are not mentioned in the reports.
 
-If a report doesn't have temporal relations, that likely means the report does not contain any relevant information for the timeline.
+If a report doesn't have temporal relations, that likely means the report does not contain any relevant information for the timeline. Avoid adding events based solely on hypothetical or planned mentions without temporal grounding.
 
 Example output format:
 [[ ## update ## ]]
@@ -183,6 +183,7 @@ class SACTTimelineBuilder(dspy.Module):
         # raise RuntimeError(f"Failed to get valid response after {MAX_RETRIES} retries.")
         if output["update"] is None:
             output["update"] = Update(add=[], remove=[])
+            output["reasoning"] = "No valid update generated, returning empty update."
         return output
 
     def process_timeline_update(self, current_timeline, update):
@@ -225,6 +226,9 @@ class SACTTimelineBuilder(dspy.Module):
         timeline = []
         reasoning = []
         
+        # NEW: Track all timelines from each iteration
+        all_timelines = []
+        
         random.seed(42)
         
         # Create clumps of reports that fit within context window
@@ -236,10 +240,18 @@ class SACTTimelineBuilder(dspy.Module):
         # Process report clumps
         for i in range(max_iter):
             random.shuffle(report_clumps)  # Shuffle clumps to avoid bias
+            iteration_timeline = []
             for clump in tqdm(report_clumps, desc=f"Processing report clumps (iteration {i + 1}/{max_iter})"):
-                timeline = self.evaluate_and_update_timeline(timeline, clump, reasoning)
-            if not timeline:
+                iteration_timeline = self.evaluate_and_update_timeline(iteration_timeline, clump, reasoning)
+            
+            if not iteration_timeline:
                 break # If no timeline was generated, stop early
+                
+            # NEW: Store this iteration's timeline
+            all_timelines.append(iteration_timeline.copy())
+
+        # NEW: Filter events by frequency across iterations
+        timeline = self.filter_frequent_events(all_timelines)
 
         # Convert dates to strings
         timeline = [(drug, relation, convert_date_to_string(date)) for drug, relation, date in timeline]
@@ -248,6 +260,34 @@ class SACTTimelineBuilder(dspy.Module):
             timeline=timeline,
             reasoning="\n\n\n".join(reasoning)
         )
+
+    def filter_frequent_events(self, all_timelines, min_frequency=2):
+        """Keep only events that appear in multiple iterations"""
+        from collections import Counter
+        
+        if len(all_timelines) <= 1:
+            return all_timelines[0] if all_timelines else []
+        
+        # Count how many times each event appears
+        event_counts = Counter()
+        for timeline in all_timelines:
+            for event in timeline:
+                event_counts[event] += 1
+        
+        # Keep events that appear at least min_frequency times
+        # OR if we have very few iterations, keep events that appear in majority
+        threshold = min(min_frequency, max(1, len(all_timelines) // 2))
+        
+        frequent_events = [event for event, count in event_counts.items() 
+                        if count >= threshold]
+        
+        # Sort by date, then by drug and relation
+        frequent_events.sort(
+            key=lambda x: (x[2].year, x[2].month or 0, x[2].day_of_month or 0,
+                        x[2].week_of_year or 0, x[0], x[1])
+        )
+        
+        return frequent_events
     
     def _create_report_clumps(self, reports: list[PatientReport], target_size: int) -> list[list[PatientReport]]:
         """Create clumps of reports that fit within the target token size"""
