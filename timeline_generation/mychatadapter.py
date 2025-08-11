@@ -47,7 +47,8 @@ class Date(NamedTuple):
     week_of_year: int | None
 
 
-Timeline = list[tuple[Literal[*CHEMO_DRUGS], Relation, Date]]
+# Timeline = list[tuple[Literal[*CHEMO_DRUGS], Relation, Date]]
+Timeline = list[tuple[str, Relation, Date]]
 
 
 class Update(NamedTuple):
