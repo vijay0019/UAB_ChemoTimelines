@@ -1,0 +1,87 @@
+{
+  "patient24": [
+    [
+      "arimidex",
+      "begins-on",
+      "2011"
+    ],
+    [
+      "arimidex",
+      "ends-on",
+      "2013-02-14"
+    ]
+  ],
+  "patient03": [
+    [
+      "cyclophosphamide",
+      "contains-1",
+      "2010-04"
+    ],
+    [
+      "cyclophosphamide",
+      "contains-1",
+      "2010-07"
+    ],
+    [
+      "cytoxan",
+      "contains-1",
+      "2010-04"
+    ],
+    [
+      "cytoxan",
+      "contains-1",
+      "2010-07"
+    ],
+    [
+      "cytoxan",
+      "ends-on",
+      "2010-07"
+    ]
+  ],
+  "patient02": [
+    [
+      "alfa-2b interferon",
+      "begins-on",
+      "2013-08-05"
+    ],
+    [
+      "alfa-2b interferon",
+      "contains-1",
+      "2013-08-25"
+    ],
+    [
+      "alfa-2b interferon",
+      "contains-1",
+      "2013-09-09"
+    ],
+    [
+      "ipilimumab",
+      "begins-on",
+      "2013-08-05"
+    ]
+  ],
+  "patient12": [],
+  "patient16": [
+    [
+      "chemotherapy",
+      "contains-1",
+      "2010-07"
+    ]
+  ],
+  "patient41": [],
+  "patient14": [],
+  "patient44": [],
+  "patient11": [
+    [
+      "alfa-2b interferon",
+      "begins-on",
+      "2008-02-04"
+    ],
+    [
+      "alfa-2b interferon",
+      "contains-1",
+      "2008-02-11"
+    ]
+  ],
+  "patient27": []
+}
