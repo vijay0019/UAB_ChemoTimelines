@@ -1,0 +1,6 @@
+
+# change the directories ignored based on your installation.
+apache-artemis-2.19.1/
+apache-maven-3.8.9/
+cuda_118_env/
+mybroker/
