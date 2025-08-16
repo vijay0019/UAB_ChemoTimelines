@@ -2,86 +2,27 @@ import math
 import os
 import random
 import re
-from time import sleep
 
 import dspy
-import pynvml
 import tiktoken
 import xmltodict
 from typing_extensions import NamedTuple, Literal, Any
 
 from eval_for_optim import evaluation_f1
 from mychatadapter import *
+from threadsafe_ollama import create_threadsafe_models
+from config import Config, MODEL, CONTEXT_WINDOW, MIN_TEMPERATURE, MAX_TEMPERATURE, MAX_RETRIES
 
 tokenizer = tiktoken.get_encoding("cl100k_base")
 
-MODEL = "ollama/phi4:latest"
-CONTEXT_WINDOW = 16384
-MIN_TEMPERATURE = 0.2
-MAX_TEMPERATURE = 1.0
-MAX_RETRIES = 8
 
-
-class ThreadSafeOllamaLM(dspy.LM):
-    def __init__(self, ports=(11438,), **kwargs):
-        self.lms = []
-        # self._counter = random.randint(0, len(ports) - 1)
-        # self._lock = threading.Lock()
-        self.kwargs = kwargs
-
-        for port in ports:
-            self.lms.append(dspy.LM(base_url=f"http://127.0.0.1:{port}", **kwargs))
-
-        self.model = kwargs.pop("model")
-
-    @staticmethod
-    def get_gpu_utilization():
-        handles = [pynvml.nvmlDeviceGetHandleByIndex(i) for i in range(deviceCount)]
-        utils = [pynvml.nvmlDeviceGetUtilizationRates(handle) for handle in handles]
-        mems = [pynvml.nvmlDeviceGetMemoryInfo(handle) for handle in handles]
-        return utils, mems
-
-    def _get_next_gpu(self):
-        sleep(random.random() * 0.1)  # small delay to avoid contention
-        utils, mems = self.get_gpu_utilization()
-        least_utilized = min(range(deviceCount), key=lambda i: (utils[i].gpu, mems[i].used, random.random()))
-        # if random.random() < 0.5 or utils[least_utilized].gpu == 0:
-        #     with self._lock:
-        #         self._counter = (self._counter + 1) % len(self.lms)
-        #     return self._counter
-        return least_utilized
-
-    def __call__(self, **kwargs):
-        lm_idx = self._get_next_gpu()
-        return self.lms[lm_idx](**kwargs)
-
-    def generate(self, **kwargs):
-        lm_idx = self._get_next_gpu()
-        return self.lms[lm_idx].generate(**kwargs)
-
-
-pynvml.nvmlInit()
-try:
-    deviceCount = pynvml.nvmlDeviceGetCount()
-except pynvml.NVMLError:
-    print("Warning: NVIDIA GPU not available, falling back to single device")
-    deviceCount = 1
-
-
-def get_temperature(retry_count):
-    return MIN_TEMPERATURE + (
-        (MAX_TEMPERATURE - MIN_TEMPERATURE) * retry_count / MAX_RETRIES if MAX_RETRIES > 0 else 0.0)
-
-
-MODEL_KWARGS = {"model": MODEL,
-                "max_tokens": CONTEXT_WINDOW,
-                "num_ctx": CONTEXT_WINDOW}
-MODELS = []
-for i in range(MAX_RETRIES + 1):
-    temperature = get_temperature(i)
-    MODEL_KWARGS["temperature"] = temperature
-    MODEL_KWARGS["seed"] = i
-    MODELS.append(ThreadSafeOllamaLM(**MODEL_KWARGS))
+# Create thread-safe models with different temperatures
+MODELS = create_threadsafe_models(
+    model_name=MODEL,
+    context_window=CONTEXT_WINDOW,
+    temperature_range=(MIN_TEMPERATURE, MAX_TEMPERATURE),
+    num_models=MAX_RETRIES + 1
+)
 
 dspy.configure(lm=MODELS[0], adapter=MyChatAdapter())
 

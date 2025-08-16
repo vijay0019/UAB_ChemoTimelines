@@ -4,100 +4,49 @@ import random
 import re
 import threading
 from pprint import pprint
-from time import sleep
 
 import dspy
 import numpy as np
 import pandas as pd
-import pynvml
 import tiktoken
 from typing_extensions import NamedTuple, Literal
 
 from mychatadapter import MyChatAdapter
+from threadsafe_ollama import create_threadsafe_models
+from config import Config, MODEL, CONTEXT_WINDOW, MIN_TEMPERATURE, MAX_TEMPERATURE
 # from dspy import ChatAdapter as MyChatAdapter
 
 tokenizer = tiktoken.get_encoding("cl100k_base")
 
-MODEL = "ollama/phi4:latest"
-CONTEXT_WINDOW = 16384
-MIN_TEMPERATURE = 0.2
-MAX_TEMPERATURE = 1.0
-MAX_RETRIES = 2
-DEFAULT_REPEAT_PENALTY = 1.1
-DEFAULT_REPEAT_LAST_N = 64
-LOW_REP_REPEAT_PENALTY = 1.25
-LOW_REP_REPEAT_LAST_N = 160
-
-
-class ThreadSafeOllamaLM(dspy.LM):
-    def __init__(self, ports=(11435, 11436, 11437, 11438), **kwargs):
-        self.lms = []
-        # self._counter = random.randint(0, len(ports) - 1)
-        # self._lock = threading.Lock()
-        self.kwargs = kwargs
-
-        for port in ports:
-            self.lms.append(dspy.LM(base_url=f"http://127.0.0.1:{port}", **kwargs))
-
-        self.model = kwargs.pop("model")
-
-    @staticmethod
-    def get_gpu_utilization():
-        handles = [pynvml.nvmlDeviceGetHandleByIndex(i) for i in range(deviceCount)]
-        utils = [pynvml.nvmlDeviceGetUtilizationRates(handle) for handle in handles]
-        mems = [pynvml.nvmlDeviceGetMemoryInfo(handle) for handle in handles]
-        return utils, mems
-
-    def _get_next_gpu(self):
-        sleep(random.random() * 0.1 + 0.1)  # small delay to avoid contention
-        utils, mems = self.get_gpu_utilization()
-        least_utilized = min(range(deviceCount), key=lambda i: (utils[i].gpu, mems[i].used, random.random()))
-        # if random.random() < 0.5 or utils[least_utilized].gpu == 0:
-        #     with self._lock:
-        #         self._counter = (self._counter + 1) % len(self.lms)
-        #     return self._counter
-        return least_utilized
-
-    def __call__(self, **kwargs):
-        lm_idx = self._get_next_gpu()
-        return self.lms[lm_idx](**kwargs)
-
-    def generate(self, **kwargs):
-        lm_idx = self._get_next_gpu()
-        return self.lms[lm_idx].generate(**kwargs)
+# Use Config values for task2-specific settings
+MAX_RETRIES = 2  # Override for task2
+DEFAULT_REPEAT_PENALTY = Config.DEFAULT_REPEAT_PENALTY
+DEFAULT_REPEAT_LAST_N = Config.DEFAULT_REPEAT_LAST_N
+LOW_REP_REPEAT_PENALTY = Config.LOW_REP_REPEAT_PENALTY
+LOW_REP_REPEAT_LAST_N = Config.LOW_REP_REPEAT_LAST_N
 
 
 pd.set_option('display.max_columns', None)
 
-pynvml.nvmlInit()
-deviceCount = pynvml.nvmlDeviceGetCount()
+# Create thread-safe models with default repeat penalty
+MODELS = create_threadsafe_models(
+    model_name=MODEL,
+    context_window=CONTEXT_WINDOW,
+    temperature_range=(MIN_TEMPERATURE, MAX_TEMPERATURE),
+    num_models=MAX_RETRIES + 1,
+    repeat_penalty=DEFAULT_REPEAT_PENALTY,
+    repeat_last_n=DEFAULT_REPEAT_LAST_N
+)
 
-
-def get_temperature(retry_count):
-    return MIN_TEMPERATURE + (
-        (MAX_TEMPERATURE - MIN_TEMPERATURE) * retry_count / MAX_RETRIES if MAX_RETRIES > 0 else 0.0)
-
-
-MODEL_KWARGS = {"model": MODEL,
-                "max_tokens": CONTEXT_WINDOW,
-                "num_ctx": CONTEXT_WINDOW,
-                "repeat_penalty": DEFAULT_REPEAT_PENALTY,
-                "repeat_last_n": DEFAULT_REPEAT_LAST_N}
-MODELS = []
-for i in range(MAX_RETRIES + 1):
-    temperature = get_temperature(i)
-    MODEL_KWARGS["temperature"] = temperature
-    MODEL_KWARGS["seed"] = i
-    MODELS.append(ThreadSafeOllamaLM(**MODEL_KWARGS))
-
-LOW_REP_MODELS = []
-MODEL_KWARGS["repeat_penalty"] = LOW_REP_REPEAT_PENALTY  # higher penalty for low repetition models
-MODEL_KWARGS["repeat_last_n"] = LOW_REP_REPEAT_LAST_N  # higher penalty for low repetition models
-for i in range(MAX_RETRIES + 1):
-    temperature = get_temperature(i)
-    MODEL_KWARGS["temperature"] = temperature
-    MODEL_KWARGS["seed"] = i
-    LOW_REP_MODELS.append(ThreadSafeOllamaLM(**MODEL_KWARGS))
+# Create thread-safe models with low repetition penalty
+LOW_REP_MODELS = create_threadsafe_models(
+    model_name=MODEL,
+    context_window=CONTEXT_WINDOW,
+    temperature_range=(MIN_TEMPERATURE, MAX_TEMPERATURE),
+    num_models=MAX_RETRIES + 1,
+    repeat_penalty=LOW_REP_REPEAT_PENALTY,
+    repeat_last_n=LOW_REP_REPEAT_LAST_N
+)
 
 dspy.configure(lm=MODELS[0], adapter=MyChatAdapter())
 
