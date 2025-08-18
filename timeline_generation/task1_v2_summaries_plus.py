@@ -8,10 +8,10 @@ import dspy
 import pynvml
 import tiktoken
 import xmltodict
-from typing_extensions import NamedTuple, Literal, Any
+from typing_extensions import Any, Literal, NamedTuple
 
 from eval_for_optim import evaluation_f1
-from mychatadapter import *
+from mychatadapter import MyChatAdapter, Date, Timeline, Update
 
 tokenizer = tiktoken.get_encoding("cl100k_base")
 
@@ -19,7 +19,7 @@ MODEL = "ollama/qwen3:32b"
 CONTEXT_WINDOW = 32768
 MIN_TEMPERATURE = 0.6
 MAX_TEMPERATURE = 0.6
-MAX_RETRIES = 1
+MAX_RETRIES = 0
 
 
 class ThreadSafeOllamaLM(dspy.LM):
@@ -87,9 +87,9 @@ dspy.configure(lm=MODELS[0], adapter=MyChatAdapter())
 
 class PatientReport(NamedTuple):
     ID: int
+    date: str  # Added date field
     type: str
     text: str
-    date: str  # Added date field
     temporal_relations: list[list[tuple[str, Any]]]
 
 
@@ -123,10 +123,10 @@ Update SACT timeline based on patient reports with running summary.
 SACT is defined as follows:
 "Systemic anticancer therapy (SACT), which includes traditional cytotoxic chemotherapy, endocrine therapy, targeted therapy, and immunotherapy, has both a low therapeutic index as well as synergistic potential when agents are given in combination."
 
-Drug Names: Extract drug names EXACTLY as they appear in the clinical text (except be sure to put them in lowercase). Do NOT normalize or convert to generic names. 
+Drug Names: Extract drug names EXACTLY as they appear in the clinical text (except be sure to put them in lowercase). Do NOT normalize or convert to generic names.
 Include ALL variations found in the text:
 - Brand names (cytoxan, taxotere, abraxane)
-- Generic names (cyclophosphamide, docetaxel, paclitaxel) 
+- Generic names (cyclophosphamide, docetaxel, paclitaxel)
 - Abbreviations (tc, ac, a/c)
 - Generic terms (chemotherapy, chemo)
 - Slight variations/typos (docetaxol for docetaxel)
@@ -135,9 +135,11 @@ If the text mentions both "cyclophosphamide" and "cytoxan", include both as sepa
 If the text mentions both "chemotherapy" and specific drug names, include both.
 Only include drugs that have a temporal relation in the text.
 
+Ignore references to cancer/neoplasms, genetic variations (e.g. HER2), and non-SACT procedures such as radiation therapy.
+
 Relations:
 - 'begins-on': treatment/medication starts
-- 'ends-on': treatment/medication ends  
+- 'ends-on': treatment/medication ends
 - 'contains-1': treatment occurred within timeframe
 'begins-on' and 'ends-on' supersede 'contains-1' for the same drug/date combination. Only use them if the text explicitly states the start or end date of the treatment.
 
@@ -161,19 +163,53 @@ Update the summary to reflect new information from current reports while preserv
 
 Example output format:
 [[ ## updated_summary ## ]]
-Patient began TC regimen (cyclophosphamide + docetaxel) in August 2011. Multiple brand and generic name variations documented (cytoxan, taxotere). Treatment continued through fall 2011 with good tolerance. Chemotherapy completed in 2012.
+**Treatment Overview:** Chemotherapy begins week 32 of 2013, with documented treatment from August 8 - October 10, 2013
+
+**Medications Administered:**
+- **Cyclophosphamide (Cytoxan):** August 8 - October 10, 2013
+  - Individual doses: August 29, September 19, October 10
+- **Docetaxel (Taxotere):** August 8 - October 10, 2013  
+  - Individual doses: August 29, September 19, October 10
+  - *Note: "Docetaxol" also documented (likely transcription error)*
+
+**Protocol Documentation:**
+- **TC regimen** active during August 2013
+- **Chemotherapy** contains specific date August 10, 2013
+- Standard 3-week cycling pattern evident
+
+**Timeline Reconciliation:**
+- Week 32 of 2013 corresponds to ~August 5-11 timeframe
+- Treatment initiation August 8 aligns with weekly scheduling
+- 4 documented treatment cycles completed over 9-week period
+
+**Clinical Notes:** Complete documentation includes both generic (cyclophosphamide, docetaxel) and brand names (Cytoxan, Taxotere) with minor spelling variant recorded.
 [[ ## timeline_update ## ]]
 Update(
-    add=[
-        ('tc', 'contains-1', Date(year=2011, month=8, day_of_month=None, week_of_year=None)),
-        ('cyclophosphamide', 'begins-on', Date(year=2011, month=8, day_of_month=1, week_of_year=None)),
-    ],
-    remove=[
-        ('cyclophosphamide', 'begins-on', Date(year=2011, month=8, day_of_month=8, week_of_year=None))
-    ]
+	add=[
+        ('chemotherapy', 'begins-on', Date(year=2013, month=None, day_of_month=None, week_of_year=32)),
+        ('chemotherapy', 'contains-1', Date(year=2013, month=8, day_of_month=10, week_of_year=None)),
+        ('cyclophosphamide', 'begins-on', Date(year=2013, month=8, day_of_month=8, week_of_year=None)),
+        ('cyclophosphamide', 'ends-on', Date(year=2013, month=10, day_of_month=10, week_of_year=None)),
+        ('cytoxan', 'begins-on', Date(year=2013, month=8, day_of_month=8, week_of_year=None)),
+        ('cytoxan', 'contains-1', Date(year=2013, month=8, day_of_month=29, week_of_year=None)),
+        ('cytoxan', 'contains-1', Date(year=2013, month=9, day_of_month=19, week_of_year=None)),
+        ('cytoxan', 'contains-1', Date(year=2013, month=10, day_of_month=10, week_of_year=None)),
+        ('docetaxel', 'begins-on', Date(year=2013, month=8, day_of_month=8, week_of_year=None)),
+        ('docetaxel', 'ends-on', Date(year=2013, month=10, day_of_month=10, week_of_year=None)),
+        ('docetaxol', 'begins-on', Date(year=2013, month=8, day_of_month=8, week_of_year=None)),
+        ('taxotere', 'begins-on', Date(year=2013, month=8, day_of_month=8, week_of_year=None)),
+        ('taxotere', 'contains-1', Date(year=2013, month=8, day_of_month=29, week_of_year=None)),
+        ('taxotere', 'contains-1', Date(year=2013, month=9, day_of_month=19, week_of_year=None)),
+        ('taxotere', 'contains-1', Date(year=2013, month=10, day_of_month=10, week_of_year=None)),
+        ('tc', 'contains-1', Date(year=2013, month=8, day_of_month=None, week_of_year=None))
+	],
+	remove=[
+		('cytoxan', 'begins-on', Date(year=2013, month=8, day_of_month=1, week_of_year=None))
+	]
 )
 [[ ## completed ## ]]
-	"""
+    """
+    # site: Literal["breast", "melanoma", "ovarian"] = dspy.InputField(desc="primary site of cancer")
     reports: list[PatientReport] = dspy.InputField(desc="JSON with clinical text and temporal relations")
     running_summary: str = dspy.InputField(desc="current summary of patient's SACT treatment journey")
     timeline: Timeline = dspy.InputField(desc="existing events in the timeline")
@@ -197,14 +233,13 @@ class SACTTimelineBuilder(dspy.Module):
             if not any(x is None for x in output.values()):
                 # print("Success!")
                 return output
+            print("Failure!")
 
         # Handle failure case
-        # print("Failure!")
         if output.get("timeline_update") is None:
             output["timeline_update"] = Update(add=[], remove=[])
         if output.get("updated_summary") is None:
             output["updated_summary"] = kwargs.get("running_summary", "")
-        output["reasoning"] = "No valid update generated, returning empty update."
         return output
 
     def process_timeline_update(self, current_timeline, update):
@@ -230,15 +265,16 @@ class SACTTimelineBuilder(dspy.Module):
                       key=lambda x: (x[2].year, x[2].month or 0, x[2].day_of_month or 0,
                                      x[2].week_of_year or 0, x[0], x[1]))
 
-    def evaluate_and_update_timeline(self, timeline, content, reasoning, running_summary):
+    def evaluate_and_update_timeline(self, timeline, content, thoughts, running_summary):
         """Process content and update timeline with summary"""
         # Update timeline with new content
-        output = self.retry(self.update_lm, 
-                          timeline=timeline, 
-                          reports=content, 
-                          running_summary=running_summary)
-        
-        reasoning.append(output.get("reasoning", ""))
+        output = self.retry(self.update_lm,
+                            timeline=timeline,
+                            reports=content,
+                            running_summary=running_summary)
+
+        thought_process = output.get("thinking", "") + "\n\n" + output.get("reasoning", "")
+        thoughts.append(thought_process.strip())
 
         # Process the update
         timeline = self.process_timeline_update(timeline, output["timeline_update"])
@@ -250,20 +286,20 @@ class SACTTimelineBuilder(dspy.Module):
         """Build timeline from text reports with running summary"""
         # Initialize
         timeline = []
-        reasoning = []
+        thoughts = []
         running_summary = "No SACT treatment information processed yet."
-        
+
         # Track all timelines and summaries from each iteration
         all_timelines = []
         all_summaries = []
-        
+
         random.seed(42)
-        
+
         # Create clumps of reports that fit within context window
         report_clumps = self._create_report_clumps(reports, target_size=CONTEXT_WINDOW // 8)
-        
+
         # Limit iterations based on max_reports
-        max_iter = max(self.min_iter, math.ceil(self.max_iter * min(self.max_reports / len(report_clumps), 1)))
+        max_iter = 1#max(self.min_iter, math.ceil(self.max_iter * min(self.max_reports / len(report_clumps), 1)))
 
         # Process report clumps
         for i in range(max_iter):
@@ -271,26 +307,27 @@ class SACTTimelineBuilder(dspy.Module):
                 random.shuffle(report_clumps)
             iteration_timeline = []
             iteration_summary = running_summary
-            
-            for clump in tqdm(report_clumps, desc=f"Processing report clumps (iteration {i + 1}/{max_iter})"):
+
+            # for clump in tqdm(report_clumps, desc=f"Processing report clumps (iteration {i + 1}/{max_iter})"):
+            for clump in report_clumps:
                 iteration_timeline, iteration_summary = self.evaluate_and_update_timeline(
-                    iteration_timeline, clump, reasoning, iteration_summary)
-            
-            if not iteration_timeline:
-                break
-                
+                    iteration_timeline, clump, thoughts, iteration_summary)
+
             # Store this iteration's results
             all_timelines.append(iteration_timeline.copy())
             all_summaries.append(iteration_summary)
-            
+
             # Update running summary for next iteration
             running_summary = iteration_summary
 
+            if not iteration_timeline:
+                break
+
         # Filter events by frequency across iterations
         timeline = self.filter_frequent_events(all_timelines)
-        
+
         # Use the most recent summary or create a final consolidated one
-        final_summary = all_summaries[-1] if all_summaries else "No SACT treatment information found."
+        final_summary = all_summaries[-1]
 
         # Convert dates to strings
         timeline = [(drug, relation, convert_date_to_string(date)) for drug, relation, date in timeline]
@@ -298,59 +335,59 @@ class SACTTimelineBuilder(dspy.Module):
         return dspy.Prediction(
             timeline=timeline,
             summary=final_summary,
-            reasoning="\n\n\n".join(reasoning)
+            thoughts="\n\n\n".join(thoughts)
         )
 
     def filter_frequent_events(self, all_timelines, min_frequency=2):
         """Keep only events that appear in multiple iterations"""
         from collections import Counter
-        
+
         if len(all_timelines) <= 1:
             return all_timelines[0] if all_timelines else []
-        
+
         # Count how many times each event appears
         event_counts = Counter()
         for timeline in all_timelines:
             for event in timeline:
                 event_counts[event] += 1
-        
+
         # Keep events that appear at least min_frequency times
         # OR if we have very few iterations, keep events that appear in majority
         threshold = min(min_frequency, max(1, len(all_timelines) // 2))
-        
-        frequent_events = [event for event, count in event_counts.items() 
-                        if count >= threshold]
-        
+
+        frequent_events = [event for event, count in event_counts.items()
+                           if count >= threshold]
+
         # Sort by date, then by drug and relation
         frequent_events.sort(
             key=lambda x: (x[2].year, x[2].month or 0, x[2].day_of_month or 0,
-                        x[2].week_of_year or 0, x[0], x[1])
+                           x[2].week_of_year or 0, x[0], x[1])
         )
-        
+
         return frequent_events
-    
+
     def _create_report_clumps(self, reports: list[PatientReport], target_size: int) -> list[list[PatientReport]]:
         """Create clumps of reports that fit within the target token size"""
         # Check if all reports fit in one clump
         total_tokens = len(tokenizer.encode(str(reports)))
         if len(reports) == 1 or total_tokens < target_size:
             return [reports]
-        
+
         # Group reports by report ID
         report_groups = {}
         for report in reports:
             if report.ID not in report_groups:
                 report_groups[report.ID] = []
             report_groups[report.ID].append(report)
-        
+
         # Sort groups by ID for consistent processing
         sorted_groups = [report_groups[id] for id in sorted(report_groups.keys())]
-        
+
         # Use greedy approach to create clumps within target size
         clumps = []
         current_clump = sorted_groups[0] if sorted_groups else []
         target_per_clump = math.ceil(total_tokens / math.ceil(total_tokens / target_size))
-        
+
         for group in sorted_groups[1:]:
             # Check if adding the next group exceeds the target size
             test_clump = current_clump + group
@@ -359,11 +396,11 @@ class SACTTimelineBuilder(dspy.Module):
             else:
                 clumps.append(current_clump)
                 current_clump = group
-        
+
         # Add the last clump
         if current_clump:
             clumps.append(current_clump)
-        
+
         return clumps
 
 
@@ -371,28 +408,26 @@ def evaluate(train, dev, zeroshot, optimize=True):
     def timeline_f1(example, pred, trace=None):
         """Enhanced timeline evaluation using the official evaluation logic"""
         if not pred.timeline and not example.timeline:
-            print("Both predicted and true timelines are empty.")
+            # print("Both predicted and true timelines are empty.")
+            # # print(f"Thoughts: {pred.thoughts}")
+            # print(f"Summary: {pred.summary}")
+            # print("F1 Score: 1.0")
             return 1.0
 
         # Use the official evaluation function with strict evaluation
         f1_score = evaluation_f1(example.timeline, pred.timeline, strict=True)
-        
+
         # Convert to sets for debugging output
         pred_set = set(pred.timeline)
         true_set = set(example.timeline)
-        
-        print("Overlap:", pred_set & true_set)
-        print("Missing:", true_set - pred_set)
-        print("Extraneous:", pred_set - true_set)
-        print(f"F1 Score: {f1_score}")
-        print(pred.summary)
 
+        # print("Overlap:", pred_set & true_set)
+        # print("Missing:", true_set - pred_set)
+        # print("Extraneous:", pred_set - true_set)
+        # # print(f"Thoughts: {pred.thoughts}")
+        # print(f"Summary: {pred.summary}")
+        # print(f"F1 Score: {f1_score}")
         return f1_score
-
-    # # Split train into train and validation sets
-    # val = [example for example in train if sum([len(tokenizer.encode(report)) for report in example.reports]) >= CONTEXT_WINDOW or len(example.timeline) == 0]
-    # train = [example for example in train if sum([len(tokenizer.encode(report)) for report in example.reports]) < CONTEXT_WINDOW and len(example.timeline) > 0]
-    # print(f"Train examples: {len(train)}, Validation examples: {len(val)}")
 
     # Define evaluator
     evaluator = dspy.Evaluate(devset=dev,
@@ -412,9 +447,19 @@ def evaluate(train, dev, zeroshot, optimize=True):
         print("Skipping optimization.")
         return acc_zero, outputs_zero, zeroshot
 
+    # Split train into train and validation sets
+    val = [example for example in train if len(tokenizer.encode(str(example.reports))) >= CONTEXT_WINDOW or len(example.timeline) > 0]
+    train = [example for example in train if example not in val]
+    print(f"Breast train examples: {len([x for x in train if x.site == 'breast'])}")
+    print(f"Breast val examples: {len([x for x in val if x.site == 'breast'])}")
+    print(f"Melanoma train examples: {len([x for x in train if x.site == 'melanoma'])}")
+    print(f"Melanoma val examples: {len([x for x in val if x.site == 'melanoma'])}")
+    print(f"Ovarian train examples: {len([x for x in train if x.site == 'ovarian'])}")
+    print(f"Ovarian val examples: {len([x for x in val if x.site == 'ovarian'])}")
+
     # Train few-shot model
     optimizer = dspy.GEPA(metric=timeline_f1, auto="light", reflection_lm=MODELS[0], num_threads=32)
-    fewshot = optimizer.compile(zeroshot, trainset=train)
+    fewshot = optimizer.compile(zeroshot, trainset=train, valset=val)
 
     # Evaluate few-shot model
     print("Few-shot results:")
@@ -458,7 +503,6 @@ def add_to_temporal_relations(ent_rel, text, temporal_relations, needs_id):
 if __name__ == "__main__":
     import json
     from collections import defaultdict
-    from copy import deepcopy
     from tqdm import tqdm
 
     task1_path = "../../chemoTimelines2024_train_dev_labeled/subtask1"
@@ -484,10 +528,10 @@ if __name__ == "__main__":
                     text = f.read().strip()
                 report_name = report[:-4]
                 ID = int(re.search(r'report(\d+)', report).group(1))
-                
+
                 # Extract report date
                 report_date = extract_report_date(text)
-                
+
                 xml_file = os.path.join(xml_path, site, split, f"{site}_{patient}_{split}", report_name,
                                         f"{report_name}.Temporal_Relation.gold.inprogress.xml")
                 temporal_relations = []
@@ -504,25 +548,28 @@ if __name__ == "__main__":
                 except FileNotFoundError:
                     pass
                 data[split]["reports"][f"{site}_{patient}"].append(
-                    PatientReport(ID=ID, type=report_type(report), text=text,
-                                  date=report_date, temporal_relations=temporal_relations))
+                    PatientReport(ID=ID, date=report_date, type=report_type(report),
+                                  text=text, temporal_relations=temporal_relations))
 
     # Rearrange data structure
     for split in data:
         new_data = {}
         for patient, reports in data[split]["reports"].items():
             new_data[patient] = dspy.Example({
+                "site": patient.split('_')[0],
                 "reports": reports,
                 "timeline": data[split]["timeline"][patient]
             }).with_inputs("reports")
-        # if split == "train":
-        #     subset = {}
-        #     for site in set(key.split('_')[0] for key in new_data.keys()):
-        #         site_patients = [key for key in new_data.keys() if key.startswith(site)]
-        #         # select top 20 patients with shortest total report length
-        #         site_patients.sort(key=lambda x: len(tokenizer.encode(str(new_data[x]["reports"]))) if new_data[x]["timeline"] else float('inf'))
-        #         subset.update({key: new_data[key] for key in site_patients[:20]})
-        #     new_data = subset
+
+        if split == "train":
+            subset = {}
+            for site in set(key.split('_')[0] for key in new_data.keys()):
+                site_patients = [key for key in new_data.keys() if key.startswith(site)]
+                # select top 20 patients with shortest total report length
+                site_patients.sort(key=lambda x: len(tokenizer.encode(str(new_data[x]["reports"]))) if new_data[x]["timeline"] else float('inf'))
+                subset.update({key: new_data[key] for key in site_patients[:20]})
+            new_data = subset
+
         data[split] = new_data
 
     train_data = list(data["train"].values())
@@ -531,7 +578,7 @@ if __name__ == "__main__":
     print(f"Train examples: {len(train_data)}")
     print(f"Dev examples: {len(dev_data)}")
 
-    _, _, builder = evaluate(train_data, dev_data, SACTTimelineBuilder(), optimize=False)
+    _, _, builder = evaluate(train_data, dev_data, SACTTimelineBuilder(), optimize=True)
 
     jsons = defaultdict(dict)
     for split in ["dev"]:
