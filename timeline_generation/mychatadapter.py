@@ -104,12 +104,12 @@ def parse_value(value, annotation):
 class MyChatAdapter(dspy.ChatAdapter):
     def parse(self, signature: Type[Signature], completion: str) -> dict[str, Any]:
         # print(f"Completion before postprocessing: {completion}")
-        reasoning = re.search(r"<think>(.*?)</think>", completion, flags=re.DOTALL)
-        if reasoning:
-            reasoning = reasoning.group(1).strip()
-            completion = completion.replace(reasoning, "").replace("<think>", "").replace("</think>", "")
+        thinking = re.search(r"<think>(.*?)</think>", completion, flags=re.DOTALL)
+        if thinking:
+            thinking = thinking.group(1).strip()
+            completion = completion.replace(thinking, "").replace("<think>", "").replace("</think>", "")
         else:
-            reasoning = ""
+            thinking = ""
         sections = [(None, [])]
         completion = re.sub(r"Literal\['finish'\]", r"finish", completion)
         completion = re.sub(r"Literal(\[.*?\])", r"\1", completion)
@@ -123,9 +123,9 @@ class MyChatAdapter(dspy.ChatAdapter):
             completion = re.sub(r"\[\[ ## (\w+) ##\n", r"[[ ## \1 ## ]]\n", completion)
             completion = re.sub(r"\n\]\]\n", "\n", completion)
         completion = re.sub(r"\w+ = \{", "{", completion)
-        completion = re.sub(r"\[\s+\[", "[", completion)
-        completion = re.sub(r"\]\s+\]", "]", completion)
-        completion = re.sub(r"\],\s+\[", "", completion)
+        # completion = re.sub(r"\[\s+\[", "[", completion)
+        # completion = re.sub(r"\]\s+\]", "]", completion)
+        # completion = re.sub(r"\],\s+\[", "", completion)  # oops!
         completion = completion.replace("[[[assistant", "[[ ## completed ## ]]").replace("[[end]]", "[[ ## completed ## ]]").replace("[[[<paste>]]]", "[[ ## completed ## ]]")
         completion = re.sub(r"\}(?!.*\}).*?$", "}\n\n[[ ## completed ## ]]", completion, flags=re.DOTALL)
         completion = completion.replace("### [[ ##", "[[ ##")
@@ -184,10 +184,12 @@ class MyChatAdapter(dspy.ChatAdapter):
             completion = re.sub(r"Date\(year=None.*", "", completion)
         # adds extraneous text after list
         completion = completion.replace("Update([])", "Update(add=[], remove=[])")
-        completion = re.sub(r"(\[\[ ## update ## \]\]\n).*?(Update\(\s*add=\[.*?\],\s*remove=\[.*?\]\s*\)).*", r"\1\2\n\n[[ ## completed ## ]]", completion, flags=re.DOTALL)
+        completion = re.sub(r"(\[\[ ## timeline_update ## \]\]\n).*?(Update\(\s*add=\[.*?\],\s*remove=\[.*?\]\s*\)).*", r"\1\2\n\n[[ ## completed ## ]]", completion, flags=re.DOTALL)
         if "[[ ## reasoning ## ]]" not in completion:
             completion = re.sub("### Step-by-step Reasoning", "[[ ## reasoning ## ]]", completion)
-        completion = re.sub(r"\[\[ ## Timeline ## \]\] Update", "[[ ## update ## ]]", completion)
+        completion = re.sub(r"\[\[ ## Timeline ## \]\] Update", "[[ ## timeline_update ## ]]", completion)
+        if "next_tool_name" not in completion:
+            completion = completion.replace(")}\n\n[[ ## completed ## ]]", ")\n\n[[ ## completed ## ]]")
         # print(f"Completion after postprocessing: {completion}")
         if missing_field:
             pass
@@ -206,7 +208,7 @@ class MyChatAdapter(dspy.ChatAdapter):
 
         sections = [(k, "\n".join(v).strip()) for k, v in sections]
 
-        fields = {"reasoning": reasoning} if reasoning else {}
+        fields = {"thinking": thinking} if thinking else {}
         for k, v in sections:
             if (k not in fields) and (k in signature.output_fields):
                 try:
