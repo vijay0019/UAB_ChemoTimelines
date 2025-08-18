@@ -1,0 +1,67 @@
+1. Team name; total number of team members; country, name of organization
+
+Team UAB, United States. Total contributers is yet to be fully defined, but work was primarily done by at least 2 MS students, 2 former MS students/developers and 2 undergraduate CS or linguitic students, supervised by 1 faculty member (PhD).
+
+2. Which subtasks did you submit results
+Subtask 1 and 2
+
+3. Brief description of the used approaches/methods
+Subtask 1
+System 1 - Phi4:14B zero shot, manual prompt
+System 2 - Same as System 1, improved prompt 
+System 3 - Same as System 2, replace Phi4:14B with GPT-4.1-mini
+Subtask 2 - Same as System 1, no entities
+
+3.a. Which option best describes the core of your system? Non-Machine Learning, Machine Learning (non Deep Learning), Deep Learning (not transformer language models such as BERT), Deep Learning (with transformer language model such as BERT), Deep Learning (large language models), Hybrid method (combination of various approaches), Other
+We used primarily LLMs (distilled versions) and encoder models, although our encoder model output did not make it into the final task.
+
+3.b. External data used other than provided by the task organizers
+Planned, but not used.
+
+3.c. What language representations did you use?
+Contextual embeddings
+
+3.d. If you used pre-trained language models, please, specify which ones.
+Phi4 (submitted),MedGemma,ClinicalBERT,MedGemma,GPT-4.1-mini (submitted),Qwen3
+
+3.e. Which features did you use in your system? e.g. unigrams, n-grams, word length, etc.
+Learned featuress
+
+3.f. Which NLP components did your system exploit (at the core, preprocessing, or postprocessing)? 
+Our primarily framework was LLMs (DSPy) and encoder models for information extraction. We used LLMs for the summarization process.
+
+3.g. Did you use the baseline system the organizers provided? If yes, describe how.
+We were going to use it for silver data and comparison, but ran out of time.
+
+3.h. If you applied supervised machine learning systems, which ones
+We used pytorch to fine-tune models, but had limited success in improving LLMs, although our encoder models with LLM-generated synthetic data showed major (~20%) improvement. Too bad we couldn't successfully integrate them in time!
+
+3.i. If you applied unsupervised machine learning, name your method.
+
+3.j. If you used pattern matching or rule based approaches, describe. Same for  dictionary lookup/string matching techniques
+
+3.k. Is your system a domain adaptation of a previous one?
+Somewhat an adaption.One MS student had recurrence prediction code that summarized notew and used DSPy to predict recurrence. This was the heart of all submitted systems.
+
+3.l.Is your system general or specific for biomedical data?
+Somewhat specific for biomedical data, but fields could be modified for other data types. Synthetic data we generated was specific to this task.
+
+3.m. Which programming languages did you use to implement your system/s
+Python
+
+3.n. Which software did you use? e.g. tensorflow, huggingface, etc.
+Pytorch, DSPy, Huggingface
+
+Additional points:
+
+4. How long did you work on the shared task?
+I estimate total effort was probably 400-500 hours, many volunteers with untracked time.
+
+5. Please, grade the degree of difficulty of the shared task - very easy, easy, average degree of difficulty, difficult, very difficult
+Very difficult.
+
+6. Would you be interested in participating in this task (or a similar one) again?
+Yes
+
+7. How did you hear about the task?
+I don't recall, but word of mouth.

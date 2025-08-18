@@ -61,7 +61,11 @@ class ThreadSafeOllamaLM(dspy.LM):
 
 
 pynvml.nvmlInit()
-deviceCount = 1#pynvml.nvmlDeviceGetCount()
+try:
+    deviceCount = pynvml.nvmlDeviceGetCount()
+except pynvml.NVMLError:
+    print("Warning: NVIDIA GPU not available, falling back to single device")
+    deviceCount = 1
 
 
 def get_temperature(retry_count):
