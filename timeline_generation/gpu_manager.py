@@ -139,13 +139,6 @@ class GPUManager:
                 memory_util = mems[i].used / mems[i].total if i < len(mems) and mems[i].total > 0 else 0
                 usage_count = self._gpu_usage_count.get(i, 0)
 
-
--                    gpu_util * 0.4 +           # GPU utilization weight
--                    memory_util * 100 * 0.4 +  # Memory utilization weight (normalized to 0-100)
--                    usage_count * 10 * 0.2 +   # Current assignment weight
--                    random.random() * 0.1      # Small random factor for tie-breaking
-
-
                 score = (
                     gpu_util * 0.4 +             # GPU utilization weight
                     memory_util * 100 * 0.4 +    # Memory utilization weight (normalized to 0-100)

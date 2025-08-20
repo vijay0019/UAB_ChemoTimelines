@@ -174,7 +174,6 @@ def evaluate(train, dev, zeroshot, optimize=True):
                               metric=timeline_f1,
                               num_threads=1,
                               display_progress=True,
-                              return_outputs=True,
                               provide_traceback=True,
                               max_errors=0)
 
@@ -222,10 +221,15 @@ def add_to_temporal_relations(ent_rel, text, temporal_relations, needs_id):
 
 
 if __name__ == "__main__":
+    import argparse
     import json
     from collections import defaultdict
     from copy import deepcopy
     from tqdm import tqdm
+
+    parser = argparse.ArgumentParser(description='Run Task1 timeline generation')
+    parser.add_argument('--output-dir', default='.', help='Output directory for generated timelines (default: current directory)')
+    args = parser.parse_args()
 
     task1_path = "/data/project/alstate/chemoTimeline2025/chemoTimelines2024_train_dev_labeled/subtask1"
 
@@ -306,8 +310,15 @@ if __name__ == "__main__":
                 else:
                     generated.timeline[i - offset] = (entry[0], entry[1], entry[2].replace("-00", ""))
             jsons[f"{site}_{split}"][patient] = generated.timeline
+    
+    # Create model postfix by cleaning up the model name
+    model_postfix = MODEL.replace('/', '_').replace(':', '_')
+    task_postfix = "task1"
+    
     for site_split, timelines in jsons.items():
-        with open(f"{site_split}_all_patients_generated_timelines.json", "w") as f:
+        filename = f"{site_split}_all_patients_generated_timelines_{model_postfix}_{task_postfix}.json"
+        filepath = os.path.join(args.output_dir, filename)
+        with open(filepath, "w") as f:
             json.dump(timelines, f, indent=2)
 
     print("Timeline examples created successfully.")

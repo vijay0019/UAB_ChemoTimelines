@@ -1,0 +1,3 @@
+export CHEMO_MODEL="ollama/gpt-oss:20b"
+export CHEMO_CONTEXT_WINDOW="65536"
+export OLLAMA_PORTS="11434"

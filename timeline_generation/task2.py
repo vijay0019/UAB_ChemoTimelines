@@ -332,7 +332,6 @@ def evaluate(train, dev, zeroshot, optimize=True):
                               metric=timeline_f1,
                               num_threads=16,
                               display_progress=True,
-                              return_outputs=True,
                               max_errors=0)
 
     # Evaluate zero-shot model
@@ -413,6 +412,7 @@ def concatenate_chunks(data, target):
 
 
 if __name__ == "__main__":
+    import argparse
     import json
     import math
     import os
@@ -420,6 +420,10 @@ if __name__ == "__main__":
     from copy import deepcopy
     from functools import partial
     from tqdm import tqdm
+
+    parser = argparse.ArgumentParser(description='Run Task2 timeline generation')
+    parser.add_argument('--output-dir', default='.', help='Output directory for generated timelines (default: current directory)')
+    args = parser.parse_args()
 
     data = {split: {"chunks": defaultdict(list), "timeline": {}} for split in ["train", "dev"]}
     notes_path = "chemoTimelines2024_train_dev_labeled/subtask1/Patient_Notes"
@@ -472,8 +476,15 @@ if __name__ == "__main__":
                     print(f"Invalid date format in entry {entry} for {patient} in {site} {split}. Removing entry.")
                     generated.timeline.remove(entry)
             jsons[f"{site}_{split}"][patient] = generated.timeline
+    
+    # Create model postfix by cleaning up the model name
+    model_postfix = MODEL.replace('/', '_').replace(':', '_')
+    task_postfix = "task2"
+    
     for site_split, timelines in jsons.items():
-        with open(f"{site_split}_all_patients_generated_timelines.json", "w") as f:
+        filename = f"{site_split}_all_patients_generated_timelines_{model_postfix}_{task_postfix}.json"
+        filepath = os.path.join(args.output_dir, filename)
+        with open(filepath, "w") as f:
             json.dump(timelines, f, indent=2)
             
     print("Timeline examples created successfully.")

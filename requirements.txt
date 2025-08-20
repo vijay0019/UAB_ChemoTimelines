@@ -1,0 +1,32 @@
+# ChemoTimelines Requirements
+# Core DSPy and LLM dependencies
+dspy-ai
+tiktoken
+typing-extensions
+
+# Data processing and analysis
+pandas
+numpy
+xmltodict
+json-repair
+
+# Scientific computing and evaluation
+scikit-learn
+python-dateutil
+
+# GPU monitoring and management
+pynvml
+
+# Progress bars and utilities
+tqdm
+
+# Development and interactive work
+ipykernel
+ipython
+matplotlib
+
+# Model constraints
+pydantic==2.11.4
+
+# LiteLLM for model compatibility
+litellm

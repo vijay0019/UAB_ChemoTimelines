@@ -1,7 +1,7 @@
 import json_repair
 import re
 import textwrap
-from typing import TYPE_CHECKING, Any, Dict, NamedTuple, Optional, Type, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Dict, NamedTuple, Optional, Type as TypingType, get_args, get_origin
 
 from litellm import ContextWindowExceededError
 from pydantic.fields import FieldInfo
@@ -98,7 +98,7 @@ def parse_value(value, annotation):
 
 
 class MyChatAdapter(dspy.ChatAdapter):
-    def parse(self, signature: Type[Signature], completion: str) -> dict[str, Any]:
+    def parse(self, signature: TypingType[Signature], completion: str) -> dict[str, Any]:
         # print(f"Completion before postprocessing: {completion}")
         thinking = re.search(r"<think>(.*?)</think>", completion, flags=re.DOTALL)
         if thinking:
