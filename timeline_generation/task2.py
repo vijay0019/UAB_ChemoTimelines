@@ -3,6 +3,7 @@ import os
 import random
 import re
 import threading
+from functools import lru_cache
 from pprint import pprint
 
 import dspy
@@ -16,7 +17,91 @@ from threadsafe_ollama import create_threadsafe_models
 from config import Config, MODEL, CONTEXT_WINDOW, MIN_TEMPERATURE, MAX_TEMPERATURE
 # from dspy import ChatAdapter as MyChatAdapter
 
-tokenizer = tiktoken.get_encoding("cl100k_base")
+import hashlib
+import weakref
+
+# Global tokenizer - can be swapped for different model types
+_default_tokenizer = tiktoken.get_encoding("cl100k_base")
+
+# Object ID cache for ephemeral objects (avoids serialization cost)
+_ephemeral_cache = weakref.WeakKeyDictionary()
+
+def _get_tokenizer():
+    """Get the current tokenizer, allowing for runtime swapping."""
+    global _default_tokenizer
+    return _default_tokenizer
+
+def set_tokenizer(new_tokenizer):
+    """Set a new tokenizer and clear both caches to ensure consistency."""
+    global _default_tokenizer, _ephemeral_cache
+    _default_tokenizer = new_tokenizer
+    cached_token_count.cache_clear()
+    _ephemeral_cache.clear()
+
+def _serialize_for_tokenization(obj) -> str:
+    """Convert object to deterministic string representation."""
+    if isinstance(obj, str):
+        return obj
+    try:
+        # Convert NamedTuples and other objects to dict for JSON serialization
+        if hasattr(obj, '_asdict'):
+            obj = obj._asdict()
+        elif hasattr(obj, '__dict__'):
+            obj = obj.__dict__
+        elif isinstance(obj, (list, tuple)):
+            obj = [item._asdict() if hasattr(item, '_asdict') else item for item in obj]
+        
+        return json.dumps(obj, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        # Fallback to string representation for non-serializable objects
+        return str(obj)
+
+def _hash_text(text: str) -> str:
+    """Return SHA1 digest as cache key (fixed-size)."""
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+@lru_cache(maxsize=2000)
+def cached_token_count(hash_key: str, serialized_text: str) -> int:
+    """Cached tokenization using hash key instead of raw text."""
+    tokenizer = _get_tokenizer()
+    
+    # Handle different tokenizer types
+    if hasattr(tokenizer, 'encode'):
+        # tiktoken or similar interface
+        return len(tokenizer.encode(serialized_text))
+    elif hasattr(tokenizer, 'tokenize'):
+        # Hugging Face tokenizer interface
+        return len(tokenizer.tokenize(serialized_text))
+    elif callable(tokenizer):
+        # Custom tokenizer function
+        result = tokenizer(serialized_text)
+        return len(result) if hasattr(result, '__len__') else result
+    else:
+        raise ValueError(f"Unsupported tokenizer type: {type(tokenizer)}")
+
+def get_token_count(obj) -> int:
+    """Get token count with optimized caching strategy."""
+    # Fast path: check ephemeral cache for objects that can be weakly referenced
+    try:
+        if obj in _ephemeral_cache:
+            return _ephemeral_cache[obj]
+    except TypeError:
+        # Object is not hashable or weak-referenceable, skip ephemeral cache
+        pass
+    
+    # Stable path: serialize and hash for cache key
+    serialized = _serialize_for_tokenization(obj)
+    hash_key = _hash_text(serialized)
+    result = cached_token_count(hash_key, serialized)
+    
+    # Store in ephemeral cache if possible (for repeated access to same object)
+    try:
+        _ephemeral_cache[obj] = result
+    except TypeError:
+        # Object is not weak-referenceable, skip ephemeral cache
+        pass
+    
+    return result
 
 # Use Config values for task2-specific settings
 MAX_RETRIES = 2  # Override for task2
@@ -246,7 +331,7 @@ class ChemoTimelineBuilder(dspy.Module):
     def evaluate_and_update_timeline(self, timeline, content, reasoning):
         """Process content and update timeline"""
         # Check if content is too long
-        if len(tokenizer.encode(content)) > self.token_threshold:
+        if get_token_count(content) > self.token_threshold:
             output = self.retry(self.debrief_lm, Notes=content)
             if output.get("reasoning"):
                 reasoning.append(output["reasoning"])
@@ -369,11 +454,12 @@ def concatenate_chunks(data, target):
     data = data.copy()
     # Concatenate chunks intelligently to fit within the context window
     for split in data:
-        items = list(data[split]["chunks"].items())
-        for key, value in items:
+        # Avoid creating unnecessary list from items()
+        for key in list(data[split]["chunks"].keys()):
+            value = data[split]["chunks"][key]
             # Concatenate chunks if they fit within the context window
             concat = "\n\n\n".join(v for k, v in value)
-            n = len(tokenizer.encode(concat))
+            n = get_token_count(concat)
             if len(value) == 1 or n < target:
                 data[split]["chunks"][key] = [concat]
             # If more than one chunk, concatenate them intelligently
@@ -388,8 +474,9 @@ def concatenate_chunks(data, target):
                 # target = math.ceil(n / math.ceil(2 * n / CONTEXT_WINDOW))
                 for i, chunk in enumerate(chunks[1:], 1):
                     # Check if adding the next chunk exceeds the context window
-                    if len(tokenizer.encode(current_chunk + "\n\n\n" + chunk)) < target:
-                        current_chunk += "\n\n\n" + chunk
+                    test_chunk = current_chunk + "\n\n\n" + chunk
+                    if get_token_count(test_chunk) < target:
+                        current_chunk = test_chunk
                     else:
                         concatenated_chunks.append(current_chunk)
                         current_chunk = chunk
@@ -397,11 +484,12 @@ def concatenate_chunks(data, target):
                     concatenated_chunks.append(current_chunk)
                 data[split]["chunks"][key] = concatenated_chunks
 
-    # Rearrange data structure
+    # Rearrange data structure - optimize by pre-caching timeline keys
     for split in data:
         new_data = {}
+        timeline_keys = set(data[split]["timeline"].keys())  # Pre-compute set for faster lookups
         for patient, chunks in data[split]["chunks"].items():
-            if patient in data[split]["timeline"]:
+            if patient in timeline_keys:
                 new_data[patient] = dspy.Example({
                     "chunks": chunks,
                     "timeline": data[split]["timeline"][patient]

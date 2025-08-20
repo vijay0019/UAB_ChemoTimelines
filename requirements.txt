@@ -17,6 +17,9 @@ python-dateutil
 # GPU monitoring and management
 pynvml
 
+# Network requests
+requests
+
 # Progress bars and utilities
 tqdm
 

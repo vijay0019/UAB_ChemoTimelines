@@ -1,7 +1,9 @@
+import json
 import math
 import os
 import random
 import re
+from functools import lru_cache
 
 import dspy
 import tiktoken
@@ -13,7 +15,91 @@ from mychatadapter import *
 from threadsafe_ollama import create_threadsafe_models
 from config import Config, MODEL, CONTEXT_WINDOW, MIN_TEMPERATURE, MAX_TEMPERATURE, MAX_RETRIES
 
-tokenizer = tiktoken.get_encoding("cl100k_base")
+import hashlib
+import weakref
+
+# Global tokenizer - can be swapped for different model types
+_default_tokenizer = tiktoken.get_encoding("cl100k_base")
+
+# Object ID cache for ephemeral objects (avoids serialization cost)
+_ephemeral_cache = weakref.WeakKeyDictionary()
+
+def _get_tokenizer():
+    """Get the current tokenizer, allowing for runtime swapping."""
+    global _default_tokenizer
+    return _default_tokenizer
+
+def set_tokenizer(new_tokenizer):
+    """Set a new tokenizer and clear both caches to ensure consistency."""
+    global _default_tokenizer, _ephemeral_cache
+    _default_tokenizer = new_tokenizer
+    cached_token_count.cache_clear()
+    _ephemeral_cache.clear()
+
+def _serialize_for_tokenization(obj) -> str:
+    """Convert object to deterministic string representation."""
+    if isinstance(obj, str):
+        return obj
+    try:
+        # Convert NamedTuples and other objects to dict for JSON serialization
+        if hasattr(obj, '_asdict'):
+            obj = obj._asdict()
+        elif hasattr(obj, '__dict__'):
+            obj = obj.__dict__
+        elif isinstance(obj, (list, tuple)):
+            obj = [item._asdict() if hasattr(item, '_asdict') else item for item in obj]
+        
+        return json.dumps(obj, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        # Fallback to string representation for non-serializable objects
+        return str(obj)
+
+def _hash_text(text: str) -> str:
+    """Return SHA1 digest as cache key (fixed-size)."""
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+@lru_cache(maxsize=2000)
+def cached_token_count(hash_key: str, serialized_text: str) -> int:
+    """Cached tokenization using hash key instead of raw text."""
+    tokenizer = _get_tokenizer()
+    
+    # Handle different tokenizer types
+    if hasattr(tokenizer, 'encode'):
+        # tiktoken or similar interface
+        return len(tokenizer.encode(serialized_text))
+    elif hasattr(tokenizer, 'tokenize'):
+        # Hugging Face tokenizer interface
+        return len(tokenizer.tokenize(serialized_text))
+    elif callable(tokenizer):
+        # Custom tokenizer function
+        result = tokenizer(serialized_text)
+        return len(result) if hasattr(result, '__len__') else result
+    else:
+        raise ValueError(f"Unsupported tokenizer type: {type(tokenizer)}")
+
+def get_token_count(obj) -> int:
+    """Get token count with optimized caching strategy."""
+    # Fast path: check ephemeral cache for objects that can be weakly referenced
+    try:
+        if obj in _ephemeral_cache:
+            return _ephemeral_cache[obj]
+    except TypeError:
+        # Object is not hashable or weak-referenceable, skip ephemeral cache
+        pass
+    
+    # Stable path: serialize and hash for cache key
+    serialized = _serialize_for_tokenization(obj)
+    hash_key = _hash_text(serialized)
+    result = cached_token_count(hash_key, serialized)
+    
+    # Store in ephemeral cache if possible (for repeated access to same object)
+    try:
+        _ephemeral_cache[obj] = result
+    except TypeError:
+        # Object is not weak-referenceable, skip ephemeral cache
+        pass
+    
+    return result
 
 # Create thread-safe models with different temperatures
 MODELS = create_threadsafe_models(
@@ -124,7 +210,7 @@ class SACTTimelineBuilder(dspy.Module):
         )
 
     def _create_report_clumps(self, reports: list[PatientReport], target_size: int) -> list[list[PatientReport]]:
-        total_tokens = len(tokenizer.encode(str(reports)))
+        total_tokens = get_token_count(reports)
         if len(reports) == 1 or total_tokens < target_size:
             return [reports]
 
@@ -140,7 +226,7 @@ class SACTTimelineBuilder(dspy.Module):
 
         for group in sorted_groups[1:]:
             test_clump = current_clump + group
-            if len(tokenizer.encode(str(test_clump))) < target_per_clump:
+            if get_token_count(test_clump) < target_per_clump:
                 current_clump = test_clump
             else:
                 clumps.append(current_clump)
@@ -281,10 +367,14 @@ if __name__ == "__main__":
             }).with_inputs("reports")
         if split == "train":
             subset = {}
-            for site in set(key.split('_')[0] for key in new_data.keys()):
+            # Pre-compute sites to avoid repeated string operations
+            sites = set(key.split('_')[0] for key in new_data.keys())
+            for site in sites:
                 site_patients = [key for key in new_data.keys() if key.startswith(site)]
-                site_patients.sort(key=lambda x: len(tokenizer.encode(str(new_data[x]["reports"]))) if new_data[x]["timeline"] else float('inf'))
-                subset.update({key: new_data[key] for key in site_patients[:20]})
+                # Cache token counts and sort by pre-computed values
+                patient_tokens = [(key, get_token_count(new_data[key]["reports"]) if new_data[key]["timeline"] else float('inf')) for key in site_patients]
+                patient_tokens.sort(key=lambda x: x[1])
+                subset.update({key: new_data[key] for key, _ in patient_tokens[:20]})
             new_data = subset
         data[split] = new_data
 
