@@ -72,6 +72,16 @@ class Config:
     TOKEN_CACHE_SIZE = get_int_env('CHEMO_TOKEN_CACHE_SIZE', 1000)
     ENABLE_TOKEN_CACHE = get_bool_env('CHEMO_ENABLE_TOKEN_CACHE', True)
     
+    # Prompt Optimization Configuration
+    ENABLE_PROMPT_OPTIMIZATION = get_bool_env('CHEMO_ENABLE_PROMPT_OPTIMIZATION', False)
+    PROMPT_OPTIMIZER = os.getenv('CHEMO_PROMPT_OPTIMIZER', 'simba').lower()
+    
+    # SIMBA Optimizer Configuration
+    SIMBA_BSIZE = get_int_env('CHEMO_SIMBA_BSIZE', 10)
+    SIMBA_NUM_CANDIDATES = get_int_env('CHEMO_SIMBA_NUM_CANDIDATES', 4)
+    SIMBA_MAX_STEPS = get_int_env('CHEMO_SIMBA_MAX_STEPS', 4)
+    SIMBA_NUM_THREADS = get_int_env('CHEMO_SIMBA_NUM_THREADS', 1)
+    
     @classmethod
     def get_ollama_ports_tuple(cls) -> Tuple[int, ...]:
         """Get Ollama ports as tuple for backward compatibility."""
@@ -89,7 +99,31 @@ class Config:
         print(f"Threading Enabled: {cls.ENABLE_THREADING}")
         print(f"Num Threads: {cls.NUM_THREADS}")
         print(f"GPU Monitoring: {cls.ENABLE_GPU_MONITORING}")
+        print(f"Prompt Optimization: {cls.ENABLE_PROMPT_OPTIMIZATION}")
+        if cls.ENABLE_PROMPT_OPTIMIZATION:
+            print(f"  Optimizer: {cls.PROMPT_OPTIMIZER}")
+            print(f"  SIMBA Config: bsize={cls.SIMBA_BSIZE}, candidates={cls.SIMBA_NUM_CANDIDATES}, steps={cls.SIMBA_MAX_STEPS}, threads={cls.SIMBA_NUM_THREADS}")
+        else:
+            print("  ⚠️  WARNING: Prompt optimization is DISABLED")
+            print("     This may result in lower accuracy!")
         print("====================================")
+    
+    @classmethod
+    def warn_if_optimization_disabled(cls):
+        """Print a warning if prompt optimization is disabled."""
+        if not cls.ENABLE_PROMPT_OPTIMIZATION:
+            print()
+            print("🚨 IMPORTANT NOTICE 🚨")
+            print("Prompt optimization is currently DISABLED!")
+            print("This will likely result in lower model accuracy.")
+            print()
+            print("To enable prompt optimization, run:")
+            print("  export CHEMO_ENABLE_PROMPT_OPTIMIZATION=true")
+            print("  export CHEMO_PROMPT_OPTIMIZER=simba")
+            print()
+            print("Or set them in your environment before running the script.")
+            print("="*50)
+            print()
 
 
 # Backward compatibility - expose common constants at module level

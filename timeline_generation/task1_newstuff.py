@@ -12,6 +12,7 @@ from typing_extensions import NamedTuple, Literal, Any
 
 from eval_for_optim import evaluation_f1
 from mychatadapter import *
+from config import Config
 
 tokenizer = tiktoken.get_encoding("cl100k_base")
 
@@ -326,7 +327,20 @@ class SACTTimelineBuilder(dspy.Module):
         return clumps
 
 
-def evaluate(train, dev, zeroshot, optimize=True):
+def get_prompt_optimizer(optimizer_name: str, metric, **kwargs):
+    """Get a DSPy optimizer based on the name."""
+    if optimizer_name == 'simba':
+        return dspy.SIMBA(
+            metric=metric,
+            bsize=kwargs.get('bsize', Config.SIMBA_BSIZE),
+            num_candidates=kwargs.get('num_candidates', Config.SIMBA_NUM_CANDIDATES),
+            max_steps=kwargs.get('max_steps', Config.SIMBA_MAX_STEPS),
+            num_threads=kwargs.get('num_threads', Config.SIMBA_NUM_THREADS)
+        )
+    else:
+        raise ValueError(f"Unsupported optimizer: {optimizer_name}. Supported: simba")
+
+def evaluate(train, dev, zeroshot, optimize=None):
     def timeline_f1(example, pred, trace=None):
         """Enhanced timeline evaluation using the official evaluation logic"""
         if not pred.timeline and not example.timeline:
@@ -367,12 +381,20 @@ def evaluate(train, dev, zeroshot, optimize=True):
     acc_zero, outputs_zero = evaluation["score"], evaluation["results"]
     print(f"Zero-shot accuracy: {acc_zero}")
 
+    # Use configuration-based optimization setting if not explicitly provided
+    if optimize is None:
+        optimize = Config.ENABLE_PROMPT_OPTIMIZATION
+        
     if not optimize:
+        print("⚠️  WARNING: Running without prompt optimization!")
+        print("   This may result in lower accuracy. To enable optimization:")
+        print("   export CHEMO_ENABLE_PROMPT_OPTIMIZATION=true")
+        print("   export CHEMO_PROMPT_OPTIMIZER=simba")
         print("Skipping optimization.")
         return acc_zero, outputs_zero, zeroshot
 
     # Train few-shot model
-    optimizer = dspy.SIMBA(metric=timeline_f1, bsize=10, num_candidates=4, max_steps=4, num_threads=1)
+    optimizer = get_prompt_optimizer(Config.PROMPT_OPTIMIZER, metric=timeline_f1)
     fewshot = optimizer.compile(zeroshot, trainset=train)
 
     # Evaluate few-shot model
@@ -486,7 +508,10 @@ if __name__ == "__main__":
     print(f"Train examples: {len(train_data)}")
     print(f"Dev examples: {len(dev_data)}")
 
-    _, _, builder = evaluate(train_data, dev_data, SACTTimelineBuilder(), optimize=True)
+    # Warn user about optimization status
+    Config.warn_if_optimization_disabled()
+
+    _, _, builder = evaluate(train_data, dev_data, SACTTimelineBuilder())
 
     jsons = defaultdict(dict)
     for split in ["train", "dev"]:
