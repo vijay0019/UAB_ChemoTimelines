@@ -1,3 +1,13 @@
+"""
+Enhanced Task 2 implementation that integrates predicted temporal links (TLINKs) 
+from the relation model to assist DSPy in generating more accurate timelines.
+
+This version extends the original task2.py by:
+1. Using the tlink_kaiwen relation model to predict temporal relations
+2. Incorporating these predictions as additional context for DSPy
+3. Providing more structured guidance for timeline generation
+"""
+
 import json
 import os
 import random
@@ -5,6 +15,7 @@ import re
 import threading
 from functools import lru_cache
 from pprint import pprint
+import logging
 
 import dspy
 import numpy as np
@@ -15,10 +26,14 @@ from typing_extensions import NamedTuple, Literal
 from mychatadapter import MyChatAdapter
 from threadsafe_ollama import create_threadsafe_models
 from config import Config, MODEL, CONTEXT_WINDOW, MIN_TEMPERATURE, MAX_TEMPERATURE
-# from dspy import ChatAdapter as MyChatAdapter
+from tlink_predictor import create_tlink_predictor, TLinkPredictor
 
 import hashlib
 import weakref
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Global tokenizer - can be swapped for different model types
 _default_tokenizer = tiktoken.get_encoding("cl100k_base")
@@ -110,7 +125,6 @@ DEFAULT_REPEAT_LAST_N = Config.DEFAULT_REPEAT_LAST_N
 LOW_REP_REPEAT_PENALTY = Config.LOW_REP_REPEAT_PENALTY
 LOW_REP_REPEAT_LAST_N = Config.LOW_REP_REPEAT_LAST_N
 
-
 pd.set_option('display.max_columns', None)
 
 # Create thread-safe models with default repeat penalty
@@ -191,13 +205,11 @@ Relation = Literal[
     "contains-1"
 ]
 
-
 class Date(NamedTuple):
 	year: int
 	month: int|None
 	day_of_month: int|None
 	week: int|None
-
 
 def convert_date_to_string(date: Date) -> str:
     """Convert Date tuple to string in competition format."""
@@ -209,8 +221,6 @@ def convert_date_to_string(date: Date) -> str:
             return f"{date.year}-{date.month:02d}"
         return f"{date.year}-{date.month:02d}-{date.day_of_month:02d}"
     return f"{date.year}-w{date.week:02d}"
-    
-
 
 # Type alias for timeline entries
 # Using str for drug names instead of Literal[*CHEMO_DRUGS] because:
@@ -231,21 +241,23 @@ EXAMPLE_TIMELINE = """
 ]
 """
 
-
-class ChemoNotesTimeline(dspy.Signature):
+class ChemoNotesTimelineWithTLinks(dspy.Signature):
     __doc__ = """
-Extract chemotherapy events and dates from clinical text.
+Extract chemotherapy events and dates from clinical text, using predicted temporal relations as guidance.
 Exclude surgical procedures, radiation therapy, and other non-chemotherapy-related events.
 Use standardized drug names (e.g., 'cyclophosphamide' instead of 'Cytoxan').
 Include ALL mentions from the following list (and any additional mentions found in the text):\n""" + "\n".join(sorted(CHEMO_DRUGS))
     Notes: str = dspy.InputField(desc="clinical text")
+    PredictedRelations: str = dspy.InputField(desc="predicted temporal relations from relation model")
     Timeline: str = dspy.OutputField(desc="structured events")
 
-
-class ChemoTimelineUpdate(dspy.Signature):
+class ChemoTimelineUpdateWithTLinks(dspy.Signature):
     __doc__ = """
 Extract therapies and temporal relations from clinical text and return as structured tuples: (therapy, relation, date)
 Exclude surgical procedures, radiation therapy, and other non-chemotherapy-related events.
+
+Use the predicted temporal relations as guidance to improve accuracy. The predicted relations show likely 
+connections between treatments and dates that have been identified by a specialized relation extraction model.
 
 Therapies: Use generic drug names (cyclophosphamide, docetaxel, chemotherapy, etc.)
 
@@ -265,8 +277,8 @@ Example output format:
     """
     timeline: TIMELINE = dspy.InputField(desc="existing events")
     chunk_content: str = dspy.InputField(desc="current text chunk")
+    predicted_relations: str = dspy.InputField(desc="predicted temporal relations for this chunk")
     timeline_update: TIMELINE = dspy.OutputField(desc="new events")
-
 
 class ChemoTimelineCleanup(dspy.Signature):
     __doc__ = """
@@ -280,18 +292,70 @@ Example output format:
     timeline: TIMELINE = dspy.InputField()
     cleaned_timeline: TIMELINE = dspy.OutputField()
 
-
-class ChemoTimelineBuilder(dspy.Module):
+class ChemoTimelineBuilderWithTLinks(dspy.Module):
     def __init__(self, starting_chunks: int = 1, intermediate_chunks: int = 1,
-                 token_threshold: int = CONTEXT_WINDOW * 0.25, timeline_cleanup_threshold: int = 10):
+                 token_threshold: int = CONTEXT_WINDOW * 0.25, timeline_cleanup_threshold: int = 10,
+                 tlink_model_dir: str = None, enable_tlinks: bool = True, dev_entities: str = None):
         super().__init__()
-        self.debrief_lm = dspy.ChainOfThought(ChemoNotesTimeline)
-        self.update_lm = dspy.ChainOfThought(ChemoTimelineUpdate)
+        self.debrief_lm = dspy.ChainOfThought(ChemoNotesTimelineWithTLinks)
+        self.update_lm = dspy.ChainOfThought(ChemoTimelineUpdateWithTLinks)
         self.cleanup_lm = dspy.ChainOfThought(ChemoTimelineCleanup)
         self.starting_chunks = starting_chunks
         self.intermediate_chunks = intermediate_chunks
         self.token_threshold = token_threshold
         self.timeline_cleanup_threshold = timeline_cleanup_threshold
+        
+        # Initialize TLINK predictor
+        self.enable_tlinks = enable_tlinks
+        self.tlink_predictor = None
+        self.dev_entities = dev_entities
+        self.use_default_entities = dev_entities == 'data/dev/dev_entities_events_subtask2.csv'
+        
+        if enable_tlinks:
+            try:
+                self.tlink_predictor = create_tlink_predictor(tlink_model_dir)
+                if self.tlink_predictor.is_enabled():
+                    logger.info("TLINK prediction enabled - will use predicted temporal relations to assist timeline generation")
+                    if self.use_default_entities:
+                        logger.info("Using default dev entities file - entity model will not be run")
+                    else:
+                        logger.info(f"Using custom dev entities file: {dev_entities}")
+                else:
+                    logger.warning("TLINK predictor could not be initialized - falling back to standard timeline generation")
+                    self.enable_tlinks = False
+            except Exception as e:
+                logger.error(f"Error initializing TLINK predictor: {e}")
+                logger.warning("TLINK prediction disabled - falling back to standard timeline generation")
+                self.enable_tlinks = False
+        else:
+            logger.info("TLINK prediction disabled by configuration")
+
+    def predict_relations_for_chunk(self, chunk_content: str) -> str:
+        """Predict temporal relations for a text chunk using the TLINK predictor"""
+        if not self.enable_tlinks or not self.tlink_predictor:
+            return ""
+        
+        try:
+            # Check if we should use predicted entities from file instead of running entity model
+            if self.use_default_entities and self.dev_entities and os.path.exists(self.dev_entities):
+                # Use entities from the dev_entities file instead of running entity extraction
+                tlinks = self.tlink_predictor.predict_tlinks_from_file(chunk_content, self.dev_entities)
+            else:
+                # Run normal entity extraction and prediction
+                tlinks = self.tlink_predictor.predict_tlinks(chunk_content)
+            
+            # Format for DSPy consumption
+            if tlinks:
+                formatted = self.tlink_predictor.format_tlinks_for_dspy(tlinks)
+                logger.debug(f"Predicted {len(tlinks)} temporal relations for chunk")
+                return formatted
+            else:
+                logger.debug("No temporal relations predicted for chunk")
+                return "No temporal relations predicted for this text."
+                
+        except Exception as e:
+            logger.error(f"Error predicting temporal relations: {e}")
+            return ""
 
     def retry(self, func, high_rep_penalty=False, **kwargs):
         for model in MODELS if not high_rep_penalty else LOW_REP_MODELS:
@@ -375,16 +439,19 @@ class ChemoTimelineBuilder(dspy.Module):
         return (9999, 99, 99, 99, drug, relation)  # Put unparseable dates at the end
 
     def evaluate_and_update_timeline(self, timeline, content, reasoning):
-        """Process content and update timeline"""
+        """Process content and update timeline with TLINK assistance"""
+        # Predict temporal relations for this content
+        predicted_relations = self.predict_relations_for_chunk(content)
+        
         # Check if content is too long
         if get_token_count(content) > self.token_threshold:
-            output = self.retry(self.debrief_lm, Notes=content)
+            output = self.retry(self.debrief_lm, Notes=content, PredictedRelations=predicted_relations)
             if output.get("reasoning"):
                 reasoning.append(output["reasoning"])
             content = output["Timeline"]
 
-        # Update timeline with new content
-        output = self.retry(self.update_lm, timeline=timeline, chunk_content=content)
+        # Update timeline with new content and predicted relations
+        output = self.retry(self.update_lm, timeline=timeline, chunk_content=content, predicted_relations=predicted_relations)
         if output.get("reasoning"):
             reasoning.append(output["reasoning"])
 
@@ -401,7 +468,7 @@ class ChemoTimelineBuilder(dspy.Module):
         return timeline
 
     def build_generic_timeline(self, chunks, timeline, reasoning):
-        """Build timeline from text chunks"""
+        """Build timeline from text chunks with TLINK assistance"""
         # Process initial chunks
         content = "\n".join(chunks[:self.starting_chunks])
         timeline = self.evaluate_and_update_timeline(timeline, content, reasoning)
@@ -430,7 +497,6 @@ class ChemoTimelineBuilder(dspy.Module):
             timeline=timeline,
             reasoning="\n\n\n".join(reasoning)
         )
-
 
 def get_prompt_optimizer(optimizer_name: str, metric, **kwargs):
     """Get a DSPy optimizer based on the name."""
@@ -467,11 +533,6 @@ def evaluate(train, dev, zeroshot, optimize=None):
             return 0.0
         return 2 * (precision * recall) / (precision + recall)
     
-    # # Split train into train and validation sets
-    # val = [example for example in train if sum([len(tokenizer.encode(chunk)) for chunk in example.chunks]) >= CONTEXT_WINDOW or len(example.timeline) == 0]
-    # train = [example for example in train if sum([len(tokenizer.encode(chunk)) for chunk in example.chunks]) < CONTEXT_WINDOW and len(example.timeline) > 0]
-    # print(f"Train examples: {len(train)}, Validation examples: {len(val)}")
-
     # Define evaluator
     evaluator = dspy.Evaluate(devset=dev,
                               metric=timeline_f1,
@@ -506,17 +567,14 @@ def evaluate(train, dev, zeroshot, optimize=None):
     evaluation = evaluator(fewshot)
     acc_few, outputs_few = evaluation["score"], evaluation["results"]
     print(f"Few-shot accuracy: {acc_few}")
-    
-    # print(dspy.inspect_history(10))
 
     if acc_zero < acc_few:
-        fewshot.save("fewshot_model.json")
-        print("Saved improved few-shot model")
+        fewshot.save("fewshot_model_with_tlinks.json")
+        print("Saved improved few-shot model with TLINK integration")
         return acc_few, outputs_few, fewshot
     else:
         print("Few-shot model did not improve over zero-shot model")
         return acc_zero, outputs_zero, zeroshot
-        
 
 def concatenate_chunks(data, target):
     data = data.copy()
@@ -566,7 +624,6 @@ def concatenate_chunks(data, target):
         
     return data
 
-
 if __name__ == "__main__":
     import argparse
     import json
@@ -577,10 +634,14 @@ if __name__ == "__main__":
     from functools import partial
     from tqdm import tqdm
 
-    parser = argparse.ArgumentParser(description='Run Task2 timeline generation')
+    parser = argparse.ArgumentParser(description='Run Task2 timeline generation with TLINK integration')
     parser.add_argument('--output-dir', default='.', help='Output directory for generated timelines (default: current directory)')
+    parser.add_argument('--tlink-model-dir', default=None, help='Directory containing trained TLINK relation model')
+    parser.add_argument('--disable-tlinks', action='store_true', help='Disable TLINK prediction and use standard timeline generation')
+    parser.add_argument('--dev-entities', default='data/dev/dev_entities_events_subtask2.csv', help='Path to file containing predicted entities for tlinks (default: data/dev/dev_entities_events_subtask2.csv)')
     args = parser.parse_args()
 
+    # Initialize data structure
     data = {split: {"chunks": defaultdict(list), "timeline": {}} for split in ["train", "dev"]}
     notes_path = "chemoTimelines2024_train_dev_labeled/subtask1/Patient_Notes"
     timelines_path = "chemoTimelines2024_train_dev_labeled/subtask1/Gold_Timelines_allPatients_processed"
@@ -611,25 +672,29 @@ if __name__ == "__main__":
     # Warn user about optimization status
     Config.warn_if_optimization_disabled()
 
-    # acc_large, outputs_large, zeroshot = evaluate(train_data, dev_data, ChemoTimelineBuilder(), optimize=False)
-    # data = concatenate_chunks(data_old, target=CONTEXT_WINDOW * 0.25)
-    # train_data = list(data["train"].values())
-    # dev_data = list(data["dev"].values())
-    # acc_small, outputs_small, fewshot = evaluate(train_data, dev_data, ChemoTimelineBuilder())
-    # if acc_small > acc_large:
-    #     print(f"Small context window model ({acc_small}) outperformed large context window model ({acc_large}).")
-    #     builder = zeroshot
-    # else:
-    #     print(f"Large context window model ({acc_large}) outperformed small context window model ({acc_small}).")
-    #     builder = fewshot
+    # Create timeline builder with TLINK integration
+    enable_tlinks = not args.disable_tlinks
+    builder_class = ChemoTimelineBuilderWithTLinks
     
-    _, _, builder = evaluate(train_data, dev_data, ChemoTimelineBuilder())
+    print(f"Creating timeline builder with TLINK integration: {enable_tlinks}")
+    if enable_tlinks and args.tlink_model_dir:
+        print(f"Using TLINK model from: {args.tlink_model_dir}")
+    
+    builder = builder_class(
+        tlink_model_dir=args.tlink_model_dir,
+        enable_tlinks=enable_tlinks,
+        dev_entities=args.dev_entities
+    )
+    
+    # Evaluate the model
+    _, _, trained_builder = evaluate(train_data, dev_data, builder)
 
+    # Generate timelines
     jsons = defaultdict(dict)
     for split in ["train", "dev"]:
         for key, value in tqdm(data[split].items(), desc=f"Processing {split} data"):
             site, patient = key.split('_')
-            generated = builder(value["chunks"])
+            generated = trained_builder(value["chunks"])
             for entry in list(generated.timeline):
                 if not re.match(r'^\d{4}(?:-(?:\d{2}(?:-\d{2})?|w\d{2}))?$', entry[2]):
                     print(f"Invalid date format in entry {entry} for {patient} in {site} {split}. Removing entry.")
@@ -638,7 +703,7 @@ if __name__ == "__main__":
     
     # Create model postfix by cleaning up the model name
     model_postfix = MODEL.replace('/', '_').replace(':', '_')
-    task_postfix = "task2"
+    task_postfix = "task2_with_tlinks" if enable_tlinks else "task2"
     
     for site_split, timelines in jsons.items():
         filename = f"{site_split}_all_patients_generated_timelines_{model_postfix}_{task_postfix}.json"
@@ -646,4 +711,4 @@ if __name__ == "__main__":
         with open(filepath, "w") as f:
             json.dump(timelines, f, indent=2)
             
-    print("Timeline examples created successfully.")
+    print("Timeline examples created successfully with TLINK integration.")
