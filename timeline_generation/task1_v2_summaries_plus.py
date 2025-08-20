@@ -15,8 +15,8 @@ from mychatadapter import MyChatAdapter, Date, Timeline, Update
 
 tokenizer = tiktoken.get_encoding("cl100k_base")
 
-MODEL = "ollama/qwen3:32b"
-CONTEXT_WINDOW = 32768
+MODEL = "ollama/qwen3:30b"
+CONTEXT_WINDOW = 65536
 MIN_TEMPERATURE = 0.6
 MAX_TEMPERATURE = 0.6
 MAX_RETRIES = 0
@@ -70,8 +70,8 @@ def get_temperature(retry_count):
 
 
 MODEL_KWARGS = {"model": MODEL,
-                "max_tokens": CONTEXT_WINDOW,
                 "num_ctx": CONTEXT_WINDOW,
+                "max_tokens": CONTEXT_WINDOW,
                 "top_p": 0.95,
                 "top_k": 20,
                 "min_p": 0}
@@ -273,7 +273,7 @@ class SACTTimelineBuilder(dspy.Module):
                             reports=content,
                             running_summary=running_summary)
 
-        thought_process = output.get("thinking", "") + "\n\n" + output.get("reasoning", "")
+        thought_process = (output.get("thinking", "") or "") + "\n\n" + (output.get("reasoning", "") or "")
         thoughts.append(thought_process.strip())
 
         # Process the update
@@ -432,7 +432,7 @@ def evaluate(train, dev, zeroshot, optimize=True):
     # Define evaluator
     evaluator = dspy.Evaluate(devset=dev,
                               metric=timeline_f1,
-                              num_threads=1,
+                              num_threads=4,
                               display_progress=True,
                               provide_traceback=True,
                               max_errors=0)
@@ -448,8 +448,9 @@ def evaluate(train, dev, zeroshot, optimize=True):
         return acc_zero, outputs_zero, zeroshot
 
     # Split train into train and validation sets
-    val = [example for example in train if len(tokenizer.encode(str(example.reports))) >= CONTEXT_WINDOW or len(example.timeline) > 0]
+    val = [example for example in train if len(tokenizer.encode(str(example.reports))) >= CONTEXT_WINDOW or len(example.timeline) == 0]
     train = [example for example in train if example not in val]
+    val = sorted(val, key=lambda x: len(tokenizer.encode(str(x.reports))), reverse=False)[:40]
     print(f"Breast train examples: {len([x for x in train if x.site == 'breast'])}")
     print(f"Breast val examples: {len([x for x in val if x.site == 'breast'])}")
     print(f"Melanoma train examples: {len([x for x in train if x.site == 'melanoma'])}")
@@ -458,7 +459,7 @@ def evaluate(train, dev, zeroshot, optimize=True):
     print(f"Ovarian val examples: {len([x for x in val if x.site == 'ovarian'])}")
 
     # Train few-shot model
-    optimizer = dspy.GEPA(metric=timeline_f1, auto="light", reflection_lm=MODELS[0], num_threads=32)
+    optimizer = dspy.BootstrapFewShotWithRandomSearch(metric=timeline_f1, num_threads=4)
     fewshot = optimizer.compile(zeroshot, trainset=train, valset=val)
 
     # Evaluate few-shot model
@@ -560,16 +561,6 @@ if __name__ == "__main__":
                 "reports": reports,
                 "timeline": data[split]["timeline"][patient]
             }).with_inputs("reports")
-
-        if split == "train":
-            subset = {}
-            for site in set(key.split('_')[0] for key in new_data.keys()):
-                site_patients = [key for key in new_data.keys() if key.startswith(site)]
-                # select top 20 patients with shortest total report length
-                site_patients.sort(key=lambda x: len(tokenizer.encode(str(new_data[x]["reports"]))) if new_data[x]["timeline"] else float('inf'))
-                subset.update({key: new_data[key] for key in site_patients[:20]})
-            new_data = subset
-
         data[split] = new_data
 
     train_data = list(data["train"].values())
