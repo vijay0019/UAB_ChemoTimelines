@@ -1,7 +1,7 @@
 import json_repair
 import re
 import textwrap
-from typing import Any, Dict, NamedTuple, Optional, Type, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Dict, NamedTuple, Optional, Type, get_args, get_origin
 
 from litellm import ContextWindowExceededError
 from pydantic.fields import FieldInfo
@@ -11,13 +11,9 @@ from dspy.adapters.base import Adapter
 from dspy.adapters.utils import *
 from dspy.clients.lm import LM
 from dspy.signatures.signature import Signature
-from dspy.utils.callback import BaseCallback
 from dspy.utils.exceptions import AdapterParseError
 
-from typing import TYPE_CHECKING, Any, Optional, Type
-
 from dspy.adapters.types import History
-from dspy.signatures.signature import Signature
 from dspy.utils.callback import BaseCallback, with_callbacks
 
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
@@ -193,9 +189,9 @@ class MyChatAdapter(dspy.ChatAdapter):
         # print(f"Completion after postprocessing: {completion}")
         if missing_field:
             pass
-            # print(
-            #     f"Missing fields in the LM response: {', '.join(missing_field)}. Please check the LM response for any missing fields."
-            # )
+            print(
+                f"Missing fields in the LM response: {', '.join(missing_field)}. Please check the LM response for any missing fields."
+            )
         for line in completion.splitlines():
             match = field_header_pattern.match(line.strip())
             if match:
@@ -214,12 +210,12 @@ class MyChatAdapter(dspy.ChatAdapter):
                 try:
                     fields[k] = parse_value(v, signature.output_fields[k].annotation)
                 except Exception as e:
-                    # print(f"Error parsing field '{k}': {e}")
+                    print(f"Error parsing field '{k}': {e}")
                     fields[k] = None
         if fields.keys() != signature.output_fields.keys():
-            # print(
-            #     f"Missing fields in the LM response: {', '.join(set(signature.output_fields.keys()) - set(fields.keys()))}. Please check the LM response for any missing fields."
-            # )
+            print(
+                f"Missing fields in the LM response: {', '.join(set(signature.output_fields.keys()) - set(fields.keys()))}. Please check the LM response for any missing fields."
+            )
             for k in signature.output_fields:
                 if k not in fields.keys():
                     fields[k] = None
