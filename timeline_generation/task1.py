@@ -16,6 +16,7 @@ from mychatadapter import *
 tokenizer = tiktoken.get_encoding("cl100k_base")
 
 MODEL = "ollama/phi4:latest"
+#MODEL = "mradermacher/Qwen3_Medical_GRPO-GGUF"
 CONTEXT_WINDOW = 16384
 MIN_TEMPERATURE = 0.2
 MAX_TEMPERATURE = 1.0
@@ -187,6 +188,7 @@ class SACTTimelineBuilder(dspy.Module):
         # raise RuntimeError(f"Failed to get valid response after {MAX_RETRIES} retries.")
         if output["update"] is None:
             output["update"] = Update(add=[], remove=[])
+            output["reasoning"] = "No update generated, returning empty update."
         return output
 
     def process_timeline_update(self, current_timeline, update):
@@ -385,7 +387,7 @@ if __name__ == "__main__":
     from copy import deepcopy
     from tqdm import tqdm
 
-    task1_path = "../../chemoTimelines2024_train_dev_labeled/subtask1"
+    task1_path = "/data/project/alstate/chemoTimeline2025/chemoTimelines2024_train_dev_labeled/subtask1"
 
     notes_path = os.path.join(task1_path, "Patient_Notes")
     xml_path = os.path.join(task1_path, "Gold_PairWise_Annotations")
