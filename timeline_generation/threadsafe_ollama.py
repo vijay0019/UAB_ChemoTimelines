@@ -1,6 +1,6 @@
 import threading
 import os
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 import random
 import time
 import socket
@@ -12,36 +12,95 @@ import pynvml
 from gpu_manager import get_gpu_manager
 
 
-def detect_running_ollama_ports(candidate_ports: Tuple[int, ...], timeout: float = 2.0) -> Tuple[int, ...]:
-    """Detect which Ollama ports are actually running and accessible."""
-    running_ports = []
+class OllamaPortManager:
+    """Singleton manager for Ollama port detection to avoid redundant scans."""
     
-    for port in candidate_ports:
-        try:
-            # First check if port is listening
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(timeout)
-            result = sock.connect_ex(('127.0.0.1', port))
-            sock.close()
-            
-            if result == 0:  # Port is open
-                # Verify it's actually Ollama by checking API endpoint
-                try:
-                    response = requests.get(f"http://127.0.0.1:{port}/api/tags", timeout=timeout)
-                    if response.status_code == 200:
-                        running_ports.append(port)
-                        print(f"Detected running Ollama instance on port {port}")
-                    else:
-                        print(f"Port {port} is open but not responding as Ollama (status: {response.status_code})")
-                except requests.exceptions.RequestException as e:
-                    print(f"Port {port} is open but failed Ollama API check: {e}")
-            else:
-                print(f"Port {port} is not accessible")
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+    
+    def __init__(self):
+        if not self._initialized:
+            self._detected_ports: Optional[Tuple[int, ...]] = None
+            self._detection_lock = threading.Lock()
+            self._initialized = True
+    
+    def get_running_ports(self, candidate_ports: Optional[Tuple[int, ...]] = None, timeout: float = 2.0) -> Tuple[int, ...]:
+        """Get running Ollama ports, detecting only once and caching results."""
+        with self._detection_lock:
+            if self._detected_ports is None:
+                if candidate_ports is None:
+                    # Get default candidate ports
+                    ports_str = os.getenv('OLLAMA_PORTS', '11434,11435,11436,11437,11438')
+                    try:
+                        candidate_ports = tuple(int(p.strip()) for p in ports_str.split(',') if p.strip())
+                    except ValueError:
+                        candidate_ports = (11434, 11435, 11436, 11437, 11438)
                 
-        except Exception as e:
-            print(f"Failed to check port {port}: {e}")
+                print(f"Checking candidate Ollama ports: {candidate_ports}")
+                self._detected_ports = self._detect_running_ollama_ports(candidate_ports, timeout)
+                
+                if not self._detected_ports:
+                    print("No running Ollama instances found, trying fallback ports...")
+                    fallback_ports = (11434, 8080, 8000)
+                    self._detected_ports = self._detect_running_ollama_ports(fallback_ports, timeout)
+                
+                if not self._detected_ports:
+                    raise RuntimeError(f"No accessible Ollama instances found. Checked: {candidate_ports + (11434, 8080, 8000)}")
+                
+                print(f"Using Ollama ports: {self._detected_ports}")
+            
+            return self._detected_ports
     
-    return tuple(running_ports)
+    def _detect_running_ollama_ports(self, candidate_ports: Tuple[int, ...], timeout: float = 2.0) -> Tuple[int, ...]:
+        """Detect which Ollama ports are actually running and accessible."""
+        running_ports = []
+        
+        for port in candidate_ports:
+            try:
+                # First check if port is listening
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(timeout)
+                result = sock.connect_ex(('127.0.0.1', port))
+                sock.close()
+                
+                if result == 0:  # Port is open
+                    # Verify it's actually Ollama by checking API endpoint
+                    try:
+                        response = requests.get(f"http://127.0.0.1:{port}/api/tags", timeout=timeout)
+                        if response.status_code == 200:
+                            running_ports.append(port)
+                            print(f"Detected running Ollama instance on port {port}")
+                        else:
+                            print(f"Port {port} is open but not responding as Ollama (status: {response.status_code})")
+                    except requests.exceptions.RequestException as e:
+                        print(f"Port {port} is open but failed Ollama API check: {e}")
+                else:
+                    print(f"Port {port} is not accessible")
+                    
+            except Exception as e:
+                print(f"Failed to check port {port}: {e}")
+        
+        return tuple(running_ports)
+    
+    def reset_detection(self):
+        """Reset port detection cache (for testing or manual refresh)."""
+        with self._detection_lock:
+            self._detected_ports = None
+
+
+# Legacy function for backward compatibility
+def detect_running_ollama_ports(candidate_ports: Tuple[int, ...], timeout: float = 2.0) -> Tuple[int, ...]:
+    """Legacy function - now uses cached port manager."""
+    manager = OllamaPortManager()
+    return manager.get_running_ports(candidate_ports, timeout)
 
 
 class ThreadSafeOllamaLM(dspy.LM):
@@ -52,31 +111,12 @@ class ThreadSafeOllamaLM(dspy.LM):
         self.kwargs = kwargs
         self._thread_local = threading.local()
 
-        # Get candidate ports from environment or use defaults
+        # Use port manager for efficient port detection
+        port_manager = OllamaPortManager()
         if ports is None:
-            ports_str = os.getenv('OLLAMA_PORTS', '11434,11435,11436,11437,11438')
-            try:
-                candidate_ports = tuple(int(p.strip()) for p in ports_str.split(',') if p.strip())
-            except ValueError:
-                print(f"Warning: Invalid OLLAMA_PORTS format '{ports_str}', using default")
-                candidate_ports = (11434, 11435, 11436, 11437, 11438)
+            running_ports = port_manager.get_running_ports()
         else:
-            candidate_ports = ports
-
-        # Detect which ports are actually running Ollama
-        print(f"Checking candidate Ollama ports: {candidate_ports}")
-        running_ports = detect_running_ollama_ports(candidate_ports)
-        
-        if not running_ports:
-            print(f"No running Ollama instances found on candidate ports: {candidate_ports}")
-            print("Attempting fallback to common ports: 11434, 8080, 8000")
-            fallback_ports = (11434, 8080, 8000)
-            running_ports = detect_running_ollama_ports(fallback_ports)
-        
-        if not running_ports:
-            raise RuntimeError(f"No accessible Ollama instances found on any port. Checked: {candidate_ports + (11434, 8080, 8000)}")
-        
-        print(f"Using Ollama ports: {running_ports}")
+            running_ports = port_manager.get_running_ports(ports)
 
         # Initialize language models for each running port
         for port in running_ports:
@@ -174,23 +214,9 @@ def create_threadsafe_models(model_name: str,
     min_temp, max_temp = temperature_range
     models = []
 
-    # Get candidate ports from environment
-    ports_str = os.getenv('OLLAMA_PORTS', '11434,11435,11436,11437,11438')
-    try:
-        candidate_ports = tuple(int(p.strip()) for p in ports_str.split(',') if p.strip())
-    except ValueError:
-        candidate_ports = (11434, 11435, 11436, 11437, 11438)
-    
-    # Detect running Ollama instances (only once for efficiency)
-    available_ports = detect_running_ollama_ports(candidate_ports)
-    
-    if not available_ports:
-        print("No running Ollama instances found, trying fallback ports...")
-        fallback_ports = (11434, 8080, 8000)
-        available_ports = detect_running_ollama_ports(fallback_ports)
-    
-    if not available_ports:
-        raise RuntimeError(f"No accessible Ollama instances found. Checked: {candidate_ports + (11434, 8080, 8000)}")
+    # Use port manager for efficient port detection (cached)
+    port_manager = OllamaPortManager()
+    available_ports = port_manager.get_running_ports()
     
     print(f"create_threadsafe_models: Using Ollama ports: {available_ports}")
 

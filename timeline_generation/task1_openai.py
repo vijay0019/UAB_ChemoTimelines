@@ -311,7 +311,6 @@ def evaluate(train, dev, zeroshot, optimize=None):
     if not optimize:
         print("⚠️  WARNING: Running without prompt optimization!")
         print("   This may result in lower accuracy. To enable optimization:")
-        print("   export CHEMO_ENABLE_PROMPT_OPTIMIZATION=true")
         print("   export CHEMO_PROMPT_OPTIMIZER=simba")
         print("Skipping optimization.")
         return acc_zero, outputs_zero, zeroshot

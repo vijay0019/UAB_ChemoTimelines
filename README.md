@@ -49,8 +49,7 @@ The system uses environment variables for configuration. Key variables include:
 - `CHEMO_ENABLE_THREADING`: Enable threading (default: `true`)
 
 ### Prompt Optimization Configuration
-- `CHEMO_ENABLE_PROMPT_OPTIMIZATION`: Enable prompt optimization (default: `false`)
-- `CHEMO_PROMPT_OPTIMIZER`: Optimizer type (default: `simba`)
+- `CHEMO_PROMPT_OPTIMIZER`: Optimizer type. Set to enable prompt optimization. Use `simba` for SIMBA optimizer. Leave empty, set to `none`, `null`, or `false` to disable optimization.
 - `CHEMO_SIMBA_BSIZE`: SIMBA batch size (default: `4`)
 - `CHEMO_SIMBA_NUM_CANDIDATES`: Number of candidates (default: `10`)
 - `CHEMO_SIMBA_MAX_STEPS`: Maximum optimization steps (default: `3`)
@@ -61,7 +60,6 @@ Example configuration:
 export CHEMO_MODEL="ollama/qwen3:30b"
 export CHEMO_CONTEXT_WINDOW="65536"
 export OLLAMA_PORTS="11435,11436,11437,11438"
-export CHEMO_ENABLE_PROMPT_OPTIMIZATION="true"
 export CHEMO_PROMPT_OPTIMIZER="simba"
 ```
 

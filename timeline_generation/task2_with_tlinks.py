@@ -553,7 +553,6 @@ def evaluate(train, dev, zeroshot, optimize=None):
     if not optimize:
         print("⚠️  WARNING: Running without prompt optimization!")
         print("   This may result in lower accuracy. To enable optimization:")
-        print("   export CHEMO_ENABLE_PROMPT_OPTIMIZATION=true")
         print("   export CHEMO_PROMPT_OPTIMIZER=simba")
         print("Skipping optimization.")
         return acc_zero, outputs_zero, zeroshot
@@ -643,8 +642,8 @@ if __name__ == "__main__":
 
     # Initialize data structure
     data = {split: {"chunks": defaultdict(list), "timeline": {}} for split in ["train", "dev"]}
-    notes_path = "chemoTimelines2024_train_dev_labeled/subtask1/Patient_Notes"
-    timelines_path = "chemoTimelines2024_train_dev_labeled/subtask1/Gold_Timelines_allPatients_processed"
+    notes_path = "/data/project/alstate/chemoTimeline2025/chemoTimelines2024_train_dev_labeled/subtask1/Patient_Notes"
+    timelines_path = "/data/project/alstate/chemoTimeline2025/chemoTimelines2024_train_dev_labeled/subtask1/Gold_Timelines_allPatients_processed"
 
     # Load timelines and notes
     report_type = lambda x: x.split('_')[-1].strip(".txt").upper()

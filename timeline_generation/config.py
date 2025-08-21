@@ -73,8 +73,8 @@ class Config:
     ENABLE_TOKEN_CACHE = get_bool_env('CHEMO_ENABLE_TOKEN_CACHE', True)
     
     # Prompt Optimization Configuration
-    ENABLE_PROMPT_OPTIMIZATION = get_bool_env('CHEMO_ENABLE_PROMPT_OPTIMIZATION', False)
-    PROMPT_OPTIMIZER = os.getenv('CHEMO_PROMPT_OPTIMIZER', 'simba').lower()
+    PROMPT_OPTIMIZER = os.getenv('CHEMO_PROMPT_OPTIMIZER', '').lower()
+    ENABLE_PROMPT_OPTIMIZATION = bool(PROMPT_OPTIMIZER and PROMPT_OPTIMIZER not in ('none', 'null', 'false', ''))
     
     # SIMBA Optimizer Configuration
     SIMBA_BSIZE = get_int_env('CHEMO_SIMBA_BSIZE', 10)
@@ -118,10 +118,9 @@ class Config:
             print("This will likely result in lower model accuracy.")
             print()
             print("To enable prompt optimization, run:")
-            print("  export CHEMO_ENABLE_PROMPT_OPTIMIZATION=true")
             print("  export CHEMO_PROMPT_OPTIMIZER=simba")
             print()
-            print("Or set them in your environment before running the script.")
+            print("Or set it in your environment before running the script.")
             print("="*50)
             print()
 

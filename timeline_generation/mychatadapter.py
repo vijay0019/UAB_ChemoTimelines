@@ -38,9 +38,64 @@ Relation = Literal[
 
 class Date(NamedTuple):
     year: int
-    month: int | None
-    day_of_month: int | None
-    week_of_year: int | None
+    month: int | None = None
+    day_of_month: int | None = None
+    week_of_year: int | None = None
+
+    @classmethod
+    def from_partial(cls, data):
+        """Create Date from partial data, handling various input formats."""
+        if isinstance(data, (list, tuple)):
+            # Handle [year, month] or [year, month, day] formats
+            if len(data) >= 1:
+                year = data[0]
+                month = data[1] if len(data) > 1 and data[1] is not None else None
+                day_of_month = data[2] if len(data) > 2 and data[2] is not None else None
+                week_of_year = data[3] if len(data) > 3 and data[3] is not None else None
+                return cls(year=year, month=month, day_of_month=day_of_month, week_of_year=week_of_year)
+        elif isinstance(data, dict):
+            # Handle dictionary format
+            return cls(
+                year=data.get('year'),
+                month=data.get('month'),
+                day_of_month=data.get('day_of_month'),
+                week_of_year=data.get('week_of_year')
+            )
+        elif isinstance(data, int):
+            # Handle year-only format
+            return cls(year=data)
+        
+        # Fallback to default construction
+        if hasattr(data, 'year'):
+            return cls(
+                year=data.year,
+                month=getattr(data, 'month', None),
+                day_of_month=getattr(data, 'day_of_month', None),
+                week_of_year=getattr(data, 'week_of_year', None)
+            )
+        
+        raise ValueError(f"Cannot create Date from {data}")
+    
+    def validate(self):
+        """Validate the Date object according to TIMEX standards."""
+        if self.year is None:
+            raise ValueError("Year is required")
+        
+        if self.month is not None and not (1 <= self.month <= 12):
+            raise ValueError(f"Month must be between 1-12, got {self.month}")
+            
+        if self.day_of_month is not None and not (1 <= self.day_of_month <= 31):
+            raise ValueError(f"Day must be between 1-31, got {self.day_of_month}")
+            
+        if self.week_of_year is not None and not (1 <= self.week_of_year <= 53):
+            raise ValueError(f"Week must be between 1-53, got {self.week_of_year}")
+        
+        # TIMEX constraint: if week is specified, month and day should typically be None
+        if self.week_of_year is not None and self.day_of_month is not None:
+            # Allow it but prioritize day_of_month for formatting
+            pass
+            
+        return self
 
 
 # Timeline = list[tuple[Literal[*CHEMO_DRUGS], Relation, Date]]
@@ -58,6 +113,33 @@ def parse_value(value, annotation):
 
     if isinstance(annotation, enum.EnumMeta):
         return find_enum_member(annotation, value)
+
+    # Special handling for Date class
+    if annotation == Date or (hasattr(annotation, '__name__') and annotation.__name__ == 'Date'):
+        try:
+            if isinstance(value, str):
+                # Try to evaluate string representation
+                candidate = eval(value)
+            else:
+                candidate = value
+                
+            # Use the new from_partial class method
+            date_obj = Date.from_partial(candidate)
+            return date_obj.validate()
+        except Exception as e:
+            print(f"Error parsing Date from {value}: {e}")
+            # Fallback: try to extract at least the year
+            if isinstance(value, (list, tuple)) and len(value) > 0:
+                year = value[0] if value[0] is not None else 2000  # fallback year
+                return Date(year=year)
+            elif isinstance(value, str):
+                # Try to extract year from string
+                import re
+                year_match = re.search(r'\b(19|20)\d{2}\b', value)
+                if year_match:
+                    return Date(year=int(year_match.group()))
+            # Last resort fallback
+            return Date(year=2000)
 
     origin = get_origin(annotation)
 
@@ -188,10 +270,12 @@ class MyChatAdapter(dspy.ChatAdapter):
             completion = completion.replace(")}\n\n[[ ## completed ## ]]", ")\n\n[[ ## completed ## ]]")
         # print(f"Completion after postprocessing: {completion}")
         if missing_field:
-            pass
             print(
                 f"Missing fields in the LM response: {', '.join(missing_field)}. Please check the LM response for any missing fields."
             )
+            # Add retry suggestion for critical missing fields
+            if any(field in ['timeline', 'cleaned_timeline'] for field in missing_field):
+                print("SUGGESTION: Consider retrying with a more explicit prompt or increasing temperature.")
         for line in completion.splitlines():
             match = field_header_pattern.match(line.strip())
             if match:
@@ -213,12 +297,21 @@ class MyChatAdapter(dspy.ChatAdapter):
                     print(f"Error parsing field '{k}': {e}")
                     fields[k] = None
         if fields.keys() != signature.output_fields.keys():
+            missing_fields = set(signature.output_fields.keys()) - set(fields.keys())
             print(
-                f"Missing fields in the LM response: {', '.join(set(signature.output_fields.keys()) - set(fields.keys()))}. Please check the LM response for any missing fields."
+                f"Missing fields in the LM response: {', '.join(missing_fields)}. Please check the LM response for any missing fields."
             )
+            # Add retry suggestion for critical missing fields
+            if any(field in ['timeline', 'cleaned_timeline'] for field in missing_fields):
+                print("SUGGESTION: Consider retrying with a more explicit prompt or increasing temperature.")
+                
             for k in signature.output_fields:
                 if k not in fields.keys():
-                    fields[k] = None
+                    # Provide sensible defaults for known field types
+                    if k in ['timeline', 'cleaned_timeline']:
+                        fields[k] = []  # Empty timeline instead of None
+                    else:
+                        fields[k] = None
 
         return fields
 
