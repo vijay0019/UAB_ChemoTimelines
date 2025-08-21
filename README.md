@@ -48,11 +48,21 @@ The system uses environment variables for configuration. Key variables include:
 - `CHEMO_NUM_THREADS`: Number of threads (default: `1`)
 - `CHEMO_ENABLE_THREADING`: Enable threading (default: `true`)
 
+### Prompt Optimization Configuration
+- `CHEMO_ENABLE_PROMPT_OPTIMIZATION`: Enable prompt optimization (default: `false`)
+- `CHEMO_PROMPT_OPTIMIZER`: Optimizer type (default: `simba`)
+- `CHEMO_SIMBA_BSIZE`: SIMBA batch size (default: `4`)
+- `CHEMO_SIMBA_NUM_CANDIDATES`: Number of candidates (default: `10`)
+- `CHEMO_SIMBA_MAX_STEPS`: Maximum optimization steps (default: `3`)
+- `CHEMO_SIMBA_NUM_THREADS`: SIMBA threads (default: `1`)
+
 Example configuration:
 ```bash
 export CHEMO_MODEL="ollama/qwen3:30b"
 export CHEMO_CONTEXT_WINDOW="65536"
 export OLLAMA_PORTS="11435,11436,11437,11438"
+export CHEMO_ENABLE_PROMPT_OPTIMIZATION="true"
+export CHEMO_PROMPT_OPTIMIZER="simba"
 ```
 
 ## Running Tasks
@@ -77,10 +87,30 @@ python task1.py
 
 Task 2 directly extracts chemotherapy timelines from clinical text chunks.
 
+#### Standard Version
 ```bash
 cd timeline_generation
 python task2.py
 ```
+
+#### Enhanced Version with TLINK Integration
+```bash
+cd timeline_generation
+# With TLINK prediction (requires trained relation model)
+python task2_with_tlinks.py --tlink-model-dir /path/to/trained/model
+
+# Without TLINK prediction (fallback to standard behavior)
+python task2_with_tlinks.py --disable-tlinks
+
+# Using pre-computed entity predictions from file
+python task2_with_tlinks.py --dev-entities /path/to/entities.csv
+```
+
+**Command Line Options for Enhanced Version:**
+- `--tlink-model-dir`: Path to trained temporal relation model
+- `--disable-tlinks`: Disable TLINK prediction 
+- `--dev-entities`: Path to CSV file with predicted entities (default: `data/dev/dev_entities_events_subtask2.csv`)
+- `--output-dir`: Directory for generated timeline files
 
 **Required data structure:**
 - Patient notes in `chemoTimelines2024_train_dev_labeled/subtask1/Patient_Notes/`
@@ -99,3 +129,48 @@ chemoTimelines2024_train_dev_labeled/subtask1/
 ```
 
 Update the data paths in the scripts if your data is located elsewhere.
+
+## TLINK Integration
+
+The enhanced Task 2 (`task2_with_tlinks.py`) includes temporal link (TLINK) prediction to improve timeline generation accuracy.
+
+### Features
+
+- **Temporal Relation Prediction**: Uses a trained BERT-based model to predict temporal relations between events and time expressions
+- **Entity Recognition**: Specialized extraction for chemotherapy-related entities
+- **Pre-computed Entities**: Support for using pre-computed entity predictions from CSV files
+- **Fallback Support**: Graceful degradation when TLINK models are unavailable
+- **Bug Fixes**: Includes critical fixes for timeline sorting and type safety
+
+### Entity File Format
+
+When using `--dev-entities`, the CSV file should contain columns:
+- `text`: Entity text
+- `start`: Character start position
+- `end`: Character end position  
+- `entity_type`: Type of entity (EVENT, TREATMENT, MEDICATION, or TIMEX3)
+
+### Dependencies for TLINK Features
+
+```bash
+pip install torch transformers scikit-learn spacy medspacy
+```
+
+## Recent Improvements
+
+### Bug Fixes
+- **Timeline Sorting**: Fixed AttributeError when sorting mixed Date objects and strings
+- **Chronological Ordering**: Replaced lexicographic sorting with proper chronological sorting
+- **Type Safety**: Fixed invalid Literal type definitions
+
+### Performance Optimizations
+- **Token Caching**: Implemented efficient token counting with dual-cache system
+- **Memory Management**: Optimized data structures and reduced memory usage
+- **Threading Safety**: Thread-safe model management for concurrent processing
+
+### Documentation
+- Comprehensive integration documentation in `TLINK_INTEGRATION_README.md`
+- Bug fix summary in `timeline_generation/BUGFIX_SUMMARY.md`
+- Test coverage for all major components
+
+For detailed information about TLINK integration, see `TLINK_INTEGRATION_README.md`.
